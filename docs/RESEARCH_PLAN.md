@@ -244,13 +244,43 @@ originally assumed and the one actually measured.
 
 The right-hand column is the one to plan against until a clean timing says otherwise.
 
+### The fixed 2048 was over half of that cost, and it was unnecessary
+
+**MEASURED 2026-09-03**, `scripts/profile_sequence_lengths.py` over all 1624 Cora NC training
+examples at k=2, K=10: token length is **p50 957, p95 1384, max 1583, mean 902**, with 2–21 nodes
+per example. So *no* Cora example needs 2048; the budget was set by what fits in 24 GB, which is a
+different question from what the data requires.
+
+The micro-batch is 1, so there is no second example to align with and padding to a fixed 2048 buys
+nothing whatsoever. Padding each example only to a multiple of 128 instead:
+
+| pad to multiple of | mean padded | max | linear cost | quadratic cost |
+| --- | --- | --- | --- | --- |
+| 1 (exact) | 902 | 1583 | 0.441× | 0.217× |
+| **128** | **966** | **1664** | **0.472×** | **0.246×** |
+| 256 | 1031 | 1792 | 0.504× | 0.278× |
+
+128 is the operating point: it keeps the number of distinct tensor shapes to ~13, which matters
+for allocator churn, and costs 7% over an exact fit. Linear terms are the projections; the
+quadratic ones are the bias and the score matrix, which a dense float bias forces to be
+materialised because it defeats flash SDPA — so the quadratic saving is real, not notional.
+
+**This is worth more than lever 7 and costs nothing.** Cora's 20 epochs fall from 6.6e7 to
+**3.1e7 tokens**, so the pessimistic Cora column becomes **~19–38 h** rather than 40–80, and peak
+memory is now set by the longest example at S=1664 rather than by 2048 — the bias drops from
+16.8 MB to 11.1 MB per sample. Because the projections dominate at these lengths but the
+materialised score matrix is not negligible, the true speedup should land between 2.1× and 4.1×.
+The table above is **not** yet rewritten for this: it needs the clean timing from the smoke run,
+and rescaling an estimate by another estimate is how the 35% MFU error happened in the first place.
+
 ### What that buys, and the seven levers
 
 A Cora-only diagnostic at 3 seeds is ~54 LoRA runs (E0.1 6, E0.2 ladder 24, E0.3 6, E1.1 6,
-E1.3 12). At 18–37 h that is 40–83 GPU-days; **at the measured MFU it is 90–180 GPU-days against a
-91-day calendar**, with the harness not yet built. It does not fit unaided, and under the
-pessimistic column it does not fit with levers 1–3 either. Levers 1–4 are already baked into §7;
-levers 5–7 are contingency, to be pulled in the order 7, 6, 5.
+E1.3 12). At 18–37 h that is 40–83 GPU-days; at the measured MFU it was 90–180 GPU-days against a
+91-day calendar. **Dynamic padding takes at least 2.1× off that**, bringing the pessimistic case
+to roughly 43–86 GPU-days — from "does not fit at all" to "fits only with the levers below". The
+harness is now built, which returns the three weeks §7 allocated to it. Levers 1–4 are already
+baked into §7; levers 5–7 are contingency, to be pulled in the order 7, 6, 5.
 
 1. **Epoch reduction.** E0.1 runs the paper's 20 epochs, because a reproduction gate must match
    the recipe. Then measure a convergence curve on Cora *once* and run the ablation ladder at the
@@ -264,10 +294,11 @@ levers 5–7 are contingency, to be pulled in the order 7, 6, 5.
    the whole project. Reserve it for `star` vs `ego_star` on LP at the end. The paper must say
    PubMed is n=1, not imply a sweep.
 
-With levers 1–3 the core drops to roughly **19–40 GPU-days at 35% MFU, or 43–90 at 16%.** The
-optimistic case fits comfortably alongside three weeks of harness building. The pessimistic case
-consumes the entire calendar and leaves nothing for writing, so if the clean timing lands near
-16%, one of these has to give as well:
+With levers 1–3 the core drops to roughly **19–40 GPU-days at 35% MFU, or 43–90 at 16%** before
+dynamic padding, and **~20–43 at 16% with it**. That is the first version of this arithmetic that
+leaves room for both the experiments and six weeks of writing. It assumes, however, that one 4090
+is actually available — which on 2026-09-03 it was not for most of the day, and no amount of
+efficiency fixes a card we do not have. If the clean timing disappoints, one of these gives too:
 
 5. **Shrink the ladder.** `random_rewire` is the most droppable arm: it controls for "any sparsity"
    rather than testing the fulcrum. Dropping it saves 6 runs. `none` is nearly free to keep as a

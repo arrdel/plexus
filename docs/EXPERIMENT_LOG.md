@@ -421,3 +421,93 @@ end-to-end gate is not. §8 rewritten: securing one 4090 is now action 1, becaus
 E0.1 and everything after it queue behind it. §7's stale "contingent on the storage grant" note
 for E0.4 removed, since E0.0f settled that. The outreach email is drafted in
 `docs/outreach/tagdlm-code-request.md` with the split question first.
+
+---
+
+## E0.0h — A silent-failure bug caught by a live GPU, and 2048 was twice the sequence we needed
+Date: 2026-09-03 · Config: n/a (infrastructure) · Seeds: n/a
+
+**Hypothesis.** With 63 tests passing, including a scaled-down real LLaDA on CPU, the first run on
+a real GPU would either work or fail for a reason the tests could not have reached (memory,
+throughput, dtype).
+
+**Falsifier.** Failing for a reason the tests *could* have reached — i.e. the CPU test suite was
+testing the wrong composition rather than a smaller version of the right one.
+
+**Setup.** `scripts/await_gpu_and_run.sh` polling ai-lab2 for a card with ≥22 GB free over three
+consecutive minutes, then launching `run_experiment.py --smoke` on it. Launched 16:07.
+
+**Result.**
+
+*The watcher worked, MEASURED.* GPU 1 freed at 17:11 and was claimed at 17:13, after two prior
+false starts were correctly rejected by the three-poll stability rule. Cora loaded, the backbone
+loaded, and LoRA attached at **167.8 M trainable on 8.02 B (2.09%)** — matching the paper's 168 M
+figure independently of the arithmetic in E0.0g.
+
+*Then it failed in 7 seconds, and the falsifier fired.* `enable_activation_checkpointing` raised
+`AttributeError`. The setter lives on `LLaDAModel`, and the unwrap walked a fixed list of
+attribute names, `("base_model", "model", "module")`. From a bare `LLaDAModelLM` that reaches it
+in two steps, which is what the CPU test exercised. Under peft the chain is
+`PeftModel → base_model → model → model` and needs `"model"` twice; the list had already spent it
+and offered `"module"`, which does not exist. **The test covered the component; the runner used the
+composition.** Fixed by searching the module tree for the outermost class implementing the setter,
+which is indifferent to wrapper depth, and confirmed on the real 8 B model: it now reports
+`base_model.model.model`.
+
+Two related traps checked while fixing it. `hasattr(module, ...)` is unsafe here because peft's
+`LoraModel.__getattr__` forwards unknown attributes to the wrapped model, so an instance check
+reports True for wrappers that do not implement the method; the search uses `hasattr(type(m), ...)`.
+And LLaDA passes **`use_reentrant=False`** to `torch.utils.checkpoint`, which matters: under
+reentrant checkpointing a block whose inputs all have `requires_grad=False` — which is every early
+block here, since the embeddings are frozen — produces no gradient at all, so the early adapters
+would never train and the run would merely look like it converged badly. A test now asserts every
+block receives gradient with checkpointing on.
+
+*Sequence length, MEASURED.* Profiling all 1624 Cora NC training examples at k=2, K=10:
+
+| statistic | tokens |
+| --- | --- |
+| p50 | 957 |
+| p95 | 1384 |
+| max | **1583** |
+| mean | 902 |
+
+Nodes per example: min 2, median 13, max 21. **No Cora example needs 2048.** The 2048 in §6 was
+chosen as the largest length that fits in 24 GB, which is a different question from what the data
+requires, and the two got conflated.
+
+Since the micro-batch is 1 there is no second example to align with, so padding to a fixed 2048
+buys nothing. Padding to a multiple of 128 instead costs **0.472× on the linear terms and 0.246×
+on the quadratic ones**, with mean padded length 966 and max 1664.
+
+**Reading.**
+
+*The efficiency finding is worth more than lever 7 and costs nothing, DERIVED from the measured
+distribution.* Cora's 20 epochs fall from 6.6e7 to 3.1e7 tokens. At the measured 16% MFU the
+pessimistic Cora run goes from ~40–80 h to ~19–38 h, and the 54-run diagnostic from 90–180
+GPU-days to ~43–86 against a 91-day calendar. Lever 7 — claiming the second 4090 — buys ~2× at the
+cost of a scheduling fight with HERALD; this buys at least 2.1× at the cost of nothing, because
+the padded positions were never carrying information. The quadratic saving is real rather than
+notional precisely because the dense float bias defeats flash SDPA, so the S×S score matrix is
+materialised per layer.
+
+*Peak memory is now set by 1664, not 2048, DERIVED.* The bias falls from 16.8 MB to 11.1 MB per
+sample and the score matrices by the same 0.66×. This has not been confirmed on hardware.
+
+*The general lesson, and it is not about this bug.* Every CPU test here was written against a
+component in isolation, and the one path not covered was the one where two correct components are
+composed in the order the runner uses. The fix was five lines; finding it cost a free-GPU window
+on a machine where windows are the scarce resource. Tests of composition are worth more than
+tests of components when the components come from someone else's library.
+
+**Caveats.** The smoke run still has not completed, so the clean forward+backward timing and the
+real training peak remain owed, and §6's wall-clock table is deliberately **not** rescaled by the
+2.1× — rescaling an estimate by another estimate is how the 35% MFU error happened. The sequence
+profile is Cora NC only; LP puts two full-budget target blocks in each example and will be longer,
+and PubMed is unmeasured. `pad_to_multiple_of=128` is a judgement call, trading 7% over an exact
+fit for ~13 distinct shapes instead of hundreds.
+
+**Consequence.** §6 gains a measured subsection on sequence length and revised lever arithmetic;
+the wall-clock table keeps its old numbers with an explicit note that they are pending a clean
+timing. The watcher is relaunched with the fix. `run_experiment.py` now builds all examples
+*before* loading the backbone, so a CPU-side bug costs seconds rather than a GPU window.
