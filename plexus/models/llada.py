@@ -61,6 +61,17 @@ def assert_snapshot_present(model_id: str = MODEL_ID, hf_home: str | None = None
     )
 
 
+def load_tokenizer(model_id: str = MODEL_ID, *, trust_remote_code: bool = True):
+    """Just the tokenizer, so prompt construction can be validated before claiming a GPU.
+
+    Worth being a separate entry point: on a contended machine a free card is a short window, and
+    loading 16 GB of weights only to fail while tokenising wastes it.
+    """
+    from transformers import AutoTokenizer
+
+    return AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+
+
 def load_backbone(
     model_id: str = MODEL_ID,
     *,
@@ -70,12 +81,12 @@ def load_backbone(
     check_snapshot: bool = True,
 ):
     """Load LLaDA and its tokenizer. Returns `(model, tokenizer)`."""
-    from transformers import AutoModel, AutoTokenizer
+    from transformers import AutoModel
 
     if check_snapshot:
         assert_snapshot_present(model_id)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+    tokenizer = load_tokenizer(model_id, trust_remote_code=trust_remote_code)
     model = AutoModel.from_pretrained(
         model_id, trust_remote_code=trust_remote_code, torch_dtype=dtype
     )
@@ -144,21 +155,36 @@ def attach_lora(
     return peft_model
 
 
-def enable_activation_checkpointing(model, strategy: str = "whole_layer") -> None:
-    """Turn on LLaDA's own activation checkpointing.
+def enable_activation_checkpointing(model, strategy: str = "whole_layer") -> str:
+    """Turn on LLaDA's own activation checkpointing. Returns the module path it was set on.
 
     `ActivationCheckpointingStrategy` is a `StrEnum`, so the plain string compares equal to the
     enum member and we avoid importing from the trust_remote_code module.
+
+    The setter lives on `LLaDAModel`, which sits at a different depth depending on what has
+    wrapped it: `LLaDAModelLM.base_model` reaches it in one step, but under peft the chain is
+    `PeftModel -> base_model -> model -> model`. Walking a fixed list of attribute names is what
+    broke here -- the list consumed "model" once and then had nothing left. So search the module
+    tree instead, which is indifferent to wrapper depth.
+
+    `hasattr(type(m), ...)` rather than `hasattr(m, ...)`: peft's `LoraModel.__getattr__`
+    forwards unknown attributes to the wrapped model, so an instance check reports True for
+    wrappers that do not implement the method and the walk stops on the wrong object.
     """
-    target = model
-    for attr in ("base_model", "model", "module"):
-        # Unwrap peft/HF wrappers until something exposes the setter.
-        if hasattr(target, "set_activation_checkpointing"):
-            break
-        target = getattr(target, attr, target)
-    if not hasattr(target, "set_activation_checkpointing"):
-        raise AttributeError("could not find set_activation_checkpointing on the model")
+    candidates = [
+        (name, module)
+        for name, module in model.named_modules()
+        if hasattr(type(module), "set_activation_checkpointing")
+    ]
+    if not candidates:
+        raise AttributeError(
+            "no module implements set_activation_checkpointing; LLaDA does not support "
+            "HuggingFace's gradient_checkpointing_enable(), so checkpointing would be a no-op"
+        )
+    # Individual blocks implement it too. Take the outermost, which propagates to its children.
+    name, target = min(candidates, key=lambda kv: len(kv[0].split(".")))
     target.set_activation_checkpointing(strategy)
+    return name or "<root>"
 
 
 def answer_logits(

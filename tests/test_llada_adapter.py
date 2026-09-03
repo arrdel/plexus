@@ -40,9 +40,8 @@ D_MODEL = 128
 SEQ = 32
 
 
-@pytest.fixture(scope="module")
-def tiny_llada():
-    """A structurally faithful LLaDA with tiny dimensions."""
+def fresh_tiny():
+    """A structurally faithful LLaDA with tiny dimensions, freshly constructed."""
     from transformers import AutoConfig, AutoModel
 
     cfg = AutoConfig.from_pretrained("GSAI-ML/LLaDA-8B-Instruct", trust_remote_code=True)
@@ -60,7 +59,12 @@ def tiny_llada():
     cfg.eos_token_id = VOCAB - 2
     cfg.mask_token_id = VOCAB - 3
     torch.manual_seed(0)
-    return AutoModel.from_config(cfg, trust_remote_code=True).to(torch.float32).eval()
+    return AutoModel.from_config(cfg, trust_remote_code=True).to(torch.float32)
+
+
+@pytest.fixture(scope="module")
+def tiny_llada():
+    return fresh_tiny().eval()
 
 
 @needs_llada_code
@@ -161,6 +165,48 @@ def test_activation_checkpointing_uses_lladas_own_api(tiny_llada):
 
 
 @needs_llada_code
+def test_activation_checkpointing_survives_the_lora_wrapper():
+    """The order the runner actually uses: attach LoRA first, then enable checkpointing.
+
+    Regression test. The original implementation walked a fixed list of attribute names
+    ("base_model", "model", "module"), which reached LLaDAModel from a bare LLaDAModelLM but not
+    from under peft, whose chain needs "model" twice. Testing only the unwrapped model passed
+    while the real path raised AttributeError after loading 16 GB of weights onto a GPU.
+    """
+    model = attach_lora(fresh_tiny(), r=4, alpha=4)
+    where = enable_activation_checkpointing(model, "whole_layer")
+    assert where and where != "<root>", "should report the module it configured"
+
+    strategies = [
+        str(getattr(m, "activation_checkpointing_strategy", None))
+        for _, m in model.named_modules()
+    ]
+    assert any(s and "whole_layer" in s for s in strategies), "strategy never reached the blocks"
+
+
+@needs_llada_code
+def test_checkpointing_target_search_ignores_peft_attribute_forwarding():
+    """peft forwards unknown attributes to the wrapped model, so instance `hasattr` lies.
+
+    If the search used `hasattr(module, ...)` instead of `hasattr(type(module), ...)`, the LoRA
+    wrapper would report the method it does not implement and the walk would stop on it.
+    """
+    model = attach_lora(fresh_tiny(), r=4, alpha=4)
+    implementers = [
+        name for name, m in model.named_modules()
+        if hasattr(type(m), "set_activation_checkpointing")
+    ]
+    forwarders = [
+        name for name, m in model.named_modules()
+        if hasattr(m, "set_activation_checkpointing")
+        and not hasattr(type(m), "set_activation_checkpointing")
+    ]
+    assert implementers, "nothing implements the setter"
+    # If peft is forwarding, the instance check is strictly more permissive than the class check.
+    assert set(implementers).isdisjoint(forwarders)
+
+
+@needs_llada_code
 def test_attention_bias_is_accepted_and_changes_the_answer_logits(tiny_llada):
     """The entry point the whole project depends on: a float bias must alter the output."""
     torch.manual_seed(0)
@@ -210,6 +256,44 @@ def test_gradients_flow_to_adapters_through_the_bias_path(tiny_llada):
     ]
     assert grads, "no trainable parameters"
     assert any(g is not None and g.abs().sum() > 0 for _, g in grads), "no adapter received gradient"
+
+
+@needs_llada_code
+def test_gradients_survive_checkpointing_in_the_runners_exact_order():
+    """LoRA, then checkpointing, then a biased forward and backward -- the full runner path.
+
+    Checkpointing plus a frozen embedding is a classic silent-failure combination: under
+    *reentrant* checkpointing a block whose inputs all have `requires_grad=False` produces no
+    gradient, so the early layers' adapters would never train and the run would merely look
+    like it converged badly. LLaDA passes `use_reentrant=False`, which handles this; this test
+    is what tells us if a future checkpoint changes that.
+    """
+    model = attach_lora(fresh_tiny(), r=4, alpha=4)
+    enable_activation_checkpointing(model, "whole_layer")
+    model.train()
+
+    ids = torch.randint(0, VOCAB - 4, (1, SEQ))
+    bias = torch.zeros((1, 1, SEQ, SEQ))
+    bias[:, :, :, SEQ - 4 :] = -1e9
+
+    logits = answer_logits(model, ids, bias, SEQ - 1)
+    answer_loss(logits, torch.tensor([7])).backward()
+
+    got_grad = {
+        n: (p.grad is not None and bool(p.grad.abs().sum() > 0))
+        for n, p in model.named_parameters()
+        if p.requires_grad
+    }
+    assert got_grad, "no trainable parameters"
+    # Every block must train, not just the last. Keyed by block index so a failure names it.
+    trained_blocks = {
+        n.split(".blocks.")[1].split(".")[0] for n, ok in got_grad.items()
+        if ok and ".blocks." in n
+    }
+    assert trained_blocks == {str(i) for i in range(N_LAYERS)}, (
+        f"only blocks {sorted(trained_blocks)} received gradient; "
+        "checkpointing may have cut the graph"
+    )
 
 
 @needs_llada_code
