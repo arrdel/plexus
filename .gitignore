@@ -1,0 +1,30 @@
+# Upstream baselines: cloned by scripts/setup_baselines.sh, kept pristine, never committed.
+baselines/
+
+# Model weights and HF cache.
+checkpoints/
+*.ckpt
+*.safetensors
+*.bin
+
+# Datasets and derived artefacts. `data/*` rather than `data/`: git does not descend into an
+# excluded directory, so a `!data/.gitkeep` negation under `data/` could never match.
+data/*
+!data/.gitkeep
+
+# Experiment outputs. Configs and notes under experiments/<id>/ ARE committed; bulk artefacts
+# (predictions, attention dumps, checkpoints) are not.
+experiments/**/outputs/
+experiments/**/*.pt
+experiments/**/*.npy
+wandb/
+outputs/
+logs/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.DS_Store
