@@ -50,13 +50,42 @@ class StubBackbone(torch.nn.Module):
         return StubOutput(self.head(h))
 
 
-def make_examples(n: int = 6):
+def make_examples(n: int = 6, pad_to_multiple_of: int = 1):
     tok = FakeTokenizer()
     tag = toy_tag()
     centers = list(range(n))
     ex = build_nc_examples(tag, tok, centers, k=2, K=10, seed=0, seq_len=SEQ,
-                           mask_token_id=5, max_target_tokens=8, max_neighbour_tokens=4)
+                           mask_token_id=5, max_target_tokens=8, max_neighbour_tokens=4,
+                           pad_to_multiple_of=pad_to_multiple_of)
     return tag, tok, ex
+
+
+def test_collate_pads_ragged_examples_to_the_batch_maximum():
+    """Examples now differ in length, so collation must align them without corrupting spans."""
+    tag, tok, ex = make_examples(6, pad_to_multiple_of=1)
+    lengths = {int(e.input_ids.numel()) for e in ex}
+    assert len(lengths) > 1, "toy examples should differ in length"
+
+    batch = collate(ex, family="star", device="cpu", bias_dtype=torch.float32)
+    seq = max(lengths)
+    assert batch["input_ids"].shape == (len(ex), seq)
+    assert batch["attention_bias"].shape == (len(ex), 1, seq, seq)
+
+    # Every example's own padding tail must be dead in both directions, whatever its length.
+    from plexus.masks import MASK_BIAS
+
+    for i, e in enumerate(ex):
+        pf = e.graph.pad_from
+        assert (batch["attention_bias"][i, 0, pf:, :] <= MASK_BIAS / 2).all()
+        assert (batch["attention_bias"][i, 0, :, pf:] <= MASK_BIAS / 2).all()
+
+
+def test_ragged_collation_preserves_each_examples_answer_position():
+    tag, tok, ex = make_examples(6, pad_to_multiple_of=1)
+    batch = collate(ex, family="star", device="cpu", bias_dtype=torch.float32)
+    for i, e in enumerate(ex):
+        assert batch["answer_pos"][i].item() == e.answer_pos
+        assert batch["input_ids"][i, e.answer_pos].item() == 5  # the [M] id used above
 
 
 def base_cfg(**kw) -> TrainConfig:
@@ -72,8 +101,9 @@ def test_collate_shapes_and_target_tokens():
     tag, tok, ex = make_examples(4)
     batch = collate(ex[:2], family="star", device="cpu", bias_dtype=torch.float32)
 
-    assert batch["input_ids"].shape == (2, SEQ)
-    assert batch["attention_bias"].shape == (2, 1, SEQ, SEQ)
+    seq = batch["input_ids"].shape[1]
+    assert batch["input_ids"].shape == (2, seq)
+    assert batch["attention_bias"].shape == (2, 1, seq, seq)
     assert batch["labels"].shape == (2,)
     # The token the model must emit is the digit for the label, not the label index itself.
     for i, e in enumerate(ex[:2]):

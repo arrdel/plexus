@@ -91,6 +91,7 @@ def _assemble(
     pad_token_id: int,
     block_budgets: list[int],
     n_required: int,
+    pad_to_multiple_of: int = 1,
 ) -> tuple[torch.Tensor, list[tuple[int, int]], int, int, int]:
     """Lay out prefix + node blocks + suffix + [M], returning ids, spans and the answer position.
 
@@ -135,7 +136,17 @@ def _assemble(
     answer_pos = len(ids)
     ids.append(mask_token_id)
     pad_from = len(ids)
-    ids.extend([pad_token_id] * (seq_len - len(ids)))
+
+    # `seq_len` is the truncation *budget*, not the tensor length. Padding every example out to
+    # the budget would be pure waste: the micro-batch is 1 (24 GB card), so there is no other
+    # example to align with, and the dense float bias defeats flash attention, meaning the
+    # S x S score matrix is materialised per layer. Cora's mean example is 902 tokens against a
+    # 2048 budget, so padding to the budget costs ~2.3x on the linear terms and ~5x on the
+    # quadratic ones. Rounding to a multiple instead keeps the number of distinct shapes small,
+    # which matters for allocator churn, at a cost of at most `pad_to_multiple_of - 1` tokens.
+    m = max(1, pad_to_multiple_of)
+    total = min(seq_len, ((pad_from + m - 1) // m) * m)
+    ids.extend([pad_token_id] * (total - len(ids)))
     return torch.tensor(ids, dtype=torch.long), spans, answer_pos, pad_from, n_dropped
 
 
@@ -160,8 +171,13 @@ def build_nc_example(
     mask_token_id: int = 126336,
     max_target_tokens: int = 256,
     max_neighbour_tokens: int = 64,
+    pad_to_multiple_of: int = 128,
 ) -> LinearisedExample:
-    """Node classification: predict the target's class at a single `[M]`."""
+    """Node classification: predict the target's class at a single `[M]`.
+
+    `seq_len` caps the example; the returned tensor is only as long as the content needs, rounded
+    up to `pad_to_multiple_of`. See `_assemble` for why that is not merely a micro-optimisation.
+    """
     options = "\n".join(
         f"{i}) {name}" for i, name in enumerate(tag.class_prompt_names)
     )
@@ -180,11 +196,11 @@ def build_nc_example(
         tokenizer, prefix, blocks, suffix,
         seq_len=seq_len, mask_token_id=mask_token_id,
         pad_token_id=tokenizer.pad_token_id or 0, block_budgets=budgets,
-        n_required=1,
+        n_required=1, pad_to_multiple_of=pad_to_multiple_of,
     )
     hops, edges = _drop_to_kept(sample, len(spans))
     graph = LinearisedGraph(
-        spans=spans, seq_len=seq_len, edges=edges, hops=hops,
+        spans=spans, seq_len=int(ids.numel()), edges=edges, hops=hops,
         node_ids=sample.node_ids[: len(spans)], pad_from=pad_from, answer_pos=answer_pos,
     )
     return LinearisedExample(
@@ -194,7 +210,9 @@ def build_nc_example(
         candidate_ids=candidate_token_ids(tokenizer, tag.num_classes),
         label=int(tag.labels[sample.node_ids[0]]),
         meta={"task": "nc", "center": sample.node_ids[0], "n_nodes": len(spans),
-              "n_dropped": n_dropped, "n_tokens": pad_from},
+              "n_dropped": n_dropped, "n_tokens": pad_from,
+              "padded_len": int(ids.numel()),
+              "pad_token_id": tokenizer.pad_token_id or 0},
     )
 
 
@@ -208,6 +226,7 @@ def build_lp_example(
     mask_token_id: int = 126336,
     max_target_tokens: int = 256,
     max_neighbour_tokens: int = 64,
+    pad_to_multiple_of: int = 128,
 ) -> LinearisedExample:
     """Link prediction: local nodes 0 and 1 are the queried pair.
 
@@ -239,11 +258,11 @@ def build_lp_example(
         tokenizer, prefix, blocks, suffix,
         seq_len=seq_len, mask_token_id=mask_token_id,
         pad_token_id=tokenizer.pad_token_id or 0, block_budgets=budgets,
-        n_required=2,
+        n_required=2, pad_to_multiple_of=pad_to_multiple_of,
     )
     hops, edges = _drop_to_kept(sample, len(spans))
     graph = LinearisedGraph(
-        spans=spans, seq_len=seq_len, edges=edges, hops=hops,
+        spans=spans, seq_len=int(ids.numel()), edges=edges, hops=hops,
         node_ids=sample.node_ids[: len(spans)], pad_from=pad_from, answer_pos=answer_pos,
     )
     return LinearisedExample(
@@ -253,5 +272,7 @@ def build_lp_example(
         candidate_ids=candidate_token_ids(tokenizer, len(LP_OPTIONS)),
         label=int(label),
         meta={"task": "lp", "pair": tuple(sample.node_ids[:2]), "n_nodes": len(spans),
-              "n_dropped": n_dropped, "n_tokens": pad_from},
+              "n_dropped": n_dropped, "n_tokens": pad_from,
+              "padded_len": int(ids.numel()),
+              "pad_token_id": tokenizer.pad_token_id or 0},
     )

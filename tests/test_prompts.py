@@ -100,6 +100,43 @@ def test_padding_starts_after_the_answer(tok):
     assert (ex.input_ids[ex.graph.pad_from:] == tok.pad_token_id).all()
 
 
+def test_sequence_is_not_padded_out_to_the_budget(tok):
+    """`seq_len` is a truncation cap, not the tensor length.
+
+    Padding a 900-token example to a 2048 budget costs ~2.3x on the linear terms and ~5x on the
+    quadratic ones, and at micro-batch 1 buys nothing at all.
+    """
+    tag = toy_tag()
+    s = sample_ego_graph(tag.build_adjacency(), 0, k=2, K=10, seed=0)
+    ex = build_nc_example(tag, s, tok, seq_len=2048, mask_token_id=MASK_ID,
+                          pad_to_multiple_of=128)
+
+    assert ex.input_ids.numel() < 2048, "example was padded out to the budget"
+    assert ex.input_ids.numel() % 128 == 0, "should round up to the multiple"
+    assert ex.input_ids.numel() >= ex.graph.pad_from
+    # The graph must describe the tensor it accompanies, or the bias is the wrong shape.
+    assert ex.graph.seq_len == ex.input_ids.numel()
+
+
+def test_pad_to_multiple_of_one_gives_an_exact_fit(tok):
+    tag = toy_tag()
+    s = sample_ego_graph(tag.build_adjacency(), 0, k=2, K=10, seed=0)
+    ex = build_nc_example(tag, s, tok, seq_len=2048, mask_token_id=MASK_ID,
+                          pad_to_multiple_of=1)
+    assert ex.input_ids.numel() == ex.graph.pad_from == ex.answer_pos + 1
+
+
+def test_rounding_never_exceeds_the_budget(tok):
+    """The multiple must not push the tensor past `seq_len`."""
+    tag = toy_tag()
+    s = sample_ego_graph(tag.build_adjacency(), 0, k=2, K=10, seed=0)
+    budget = _nc_reserved(tok, tag) + 8 + 4
+    ex = build_nc_example(tag, s, tok, seq_len=budget, mask_token_id=MASK_ID,
+                          max_target_tokens=8, max_neighbour_tokens=4,
+                          pad_to_multiple_of=4096)
+    assert ex.input_ids.numel() <= budget
+
+
 def test_label_is_the_targets_label(tok):
     tag = toy_tag()
     for center in range(5):

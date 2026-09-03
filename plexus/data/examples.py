@@ -93,19 +93,39 @@ def collate(
 ) -> dict:
     """Stack examples and build their attention bias.
 
-    `bias_dtype` defaults to bf16: it halves the 16.8 MB-per-sample cost and matches the compute
-    dtype, at the cost of coarsening graded biases. `HopBias` values are O(1), so bf16's ~3 decimal
-    digits are enough; revisit if E1 needs finer resolution.
+    Examples have **different lengths**: they are padded only to a multiple of 128, not to the
+    truncation budget, so the batch is padded here to its own longest member. At micro-batch 1
+    that is no padding at all, which is the point -- Cora's mean example is 902 tokens against a
+    2048 budget.
+
+    `bias_dtype` defaults to bf16: it halves the per-sample cost and matches the compute dtype, at
+    the cost of coarsening graded biases. `HopBias` values are O(1), so bf16's ~3 decimal digits
+    are enough; revisit if E1 needs finer resolution.
     """
-    input_ids = torch.stack([e.input_ids for e in examples]).to(device)
+    seq = max(int(e.input_ids.numel()) for e in examples)
+    if any(int(e.input_ids.numel()) != seq for e in examples):
+        padded = []
+        for e in examples:
+            ids = e.input_ids
+            if ids.numel() < seq:
+                fill = int(e.meta.get("pad_token_id", 0))
+                ids = torch.cat([ids, ids.new_full((seq - ids.numel(),), fill)])
+            padded.append(ids)
+        input_ids = torch.stack(padded).to(device)
+    else:
+        input_ids = torch.stack([e.input_ids for e in examples]).to(device)
     labels = torch.tensor([e.label for e in examples], dtype=torch.long, device=device)
     answer_pos = torch.tensor([e.answer_pos for e in examples], dtype=torch.long, device=device)
     candidate_ids = torch.tensor(examples[0].candidate_ids, dtype=torch.long, device=device)
 
+    # `seq_len=seq` re-homes any shorter graph into the batch's length, extending its padding
+    # tail; `build_attention_bias` masks from `pad_from` in both directions, so the extra
+    # positions are dead rather than silently readable.
     bias = build_attention_bias(
         [e.graph for e in examples],
         family=family,
         hop_bias=hop_bias,
+        seq_len=seq,
         dtype=bias_dtype,
         device=device,
         generator=generator,
