@@ -26,9 +26,11 @@ from plexus.data.tags import SPLIT_PROVENANCE, load_tag
 from plexus.metrics import Result
 from plexus.models.llada import (
     MASK_TOKEN_ID,
+    assert_snapshot_present,
     attach_lora,
     enable_activation_checkpointing,
     load_backbone,
+    load_tokenizer,
 )
 from plexus.train import TrainConfig, evaluate, train
 
@@ -80,19 +82,11 @@ def main():
     tag = load_tag(args.dataset, args.data_root, seed=args.seed)
     print(" ", tag.summary(), flush=True)
 
-    print(f"loading backbone on {args.device} ...", flush=True)
-    model, tokenizer = load_backbone(device=args.device)
-    n_base = sum(p.numel() for p in model.parameters())
-
-    if not args.no_lora:
-        model = attach_lora(model)
-        n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"  backbone {n_base / 1e9:.2f}B params, LoRA trainable "
-              f"{n_trainable / 1e6:.1f}M ({100 * n_trainable / n_base:.2f}%)", flush=True)
-        enable_activation_checkpointing(model)
-    else:
-        n_trainable = 0
-        print(f"  backbone {n_base / 1e9:.2f}B params, frozen (no LoRA)", flush=True)
+    # Everything that does not need the GPU happens first. On a contended machine a free card is
+    # a short window, and loading 16 GB of weights before discovering a tokenisation or prompt
+    # bug throws that window away -- which is exactly what happened on 2026-09-03.
+    assert_snapshot_present()
+    tokenizer = load_tokenizer()
 
     prompt_kw = {"mask_token_id": MASK_TOKEN_ID}
     print("building examples ...", flush=True)
@@ -126,6 +120,21 @@ def main():
     print(f"  train {len(train_ex)}, eval {len(test_ex)}; "
           f"tokens min/mean/max {min(tok_lens)}/{sum(tok_lens) / len(tok_lens):.0f}/{max(tok_lens)}; "
           f"neighbours dropped {dropped}", flush=True)
+
+    print(f"loading backbone on {args.device} ...", flush=True)
+    model, _ = load_backbone(device=args.device, check_snapshot=False)
+    n_base = sum(p.numel() for p in model.parameters())
+
+    if not args.no_lora:
+        model = attach_lora(model)
+        n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"  backbone {n_base / 1e9:.2f}B params, LoRA trainable "
+              f"{n_trainable / 1e6:.1f}M ({100 * n_trainable / n_base:.2f}%)", flush=True)
+        where = enable_activation_checkpointing(model)
+        print(f"  activation checkpointing (whole_layer) set on {where}", flush=True)
+    else:
+        n_trainable = 0
+        print(f"  backbone {n_base / 1e9:.2f}B params, frozen (no LoRA)", flush=True)
 
     cfg = TrainConfig(
         task=args.task, mask_family=args.mask_family, dataset=args.dataset, seed=args.seed,
