@@ -1,0 +1,23 @@
+# ai-lab2's queue. titan3 runs the four mask-ladder arms at seed 0 on four cards, so this host
+# takes what titan3 is *not* running, starting with the two arms the paper's method claim rests on.
+#
+#   ONLY_GPU=0 ./scripts/run_queue.sh scripts/queue_ailab2.txt &
+#   ONLY_GPU=1 ./scripts/run_queue.sh scripts/queue_ailab2.txt &
+#
+# Splitting the work this way rather than pointing both hosts at one queue file costs a little
+# duplication of intent and buys about thirteen hours on the graded-bias result, which would
+# otherwise sit behind titan3's four ladder arms.
+#
+# One deliberate duplicate is kept at the end: star seed 0 also runs on titan3's A6000s, and the
+# same-seed gap between a 4090 and an A6000 is the noise floor below which no difference between
+# arms means anything. It is last because it is a measurement about the measurement, not a result.
+
+e11_hopbias_nc_s0 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E1.1_hopbias_nc_s0
+e12_hopbias_ans_nc_s0 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E1.2_hopbias_answer_nc_s0
+
+e02_rewire_nc_s0  scripts/run_experiment.py --task nc --mask-family random_rewire --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_rewire_nc_s0
+
+e11_hopbias_nc_s1 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --seed 1 --epochs 20 --eval-every-epochs 4 --out experiments/E1.1_hopbias_nc_s1
+e12_hopbias_ans_nc_s1 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 1 --epochs 20 --eval-every-epochs 4 --out experiments/E1.2_hopbias_answer_nc_s1
+
+e01_star_nc_s0_replicate scripts/run_experiment.py --task nc --mask-family star --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E0.1_star_nc_s0

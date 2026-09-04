@@ -32,12 +32,18 @@ POLL_SECONDS=${POLL_SECONDS:-60}
 MAX_WAIT_HOURS=${MAX_WAIT_HOURS:-96}
 ONLY_GPU=${ONLY_GPU:-}
 WORKER=${WORKER:-${ONLY_GPU:-0}}
+FAST_FAIL_SECONDS=${FAST_FAIL_SECONDS:-120}
+MAX_FAST_FAILURES=${MAX_FAST_FAILURES:-2}
 
 export HF_HOME=${HF_HOME:-/tmp/adelechinda/hf}
 export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
 export PLEXUS_DATA_ROOT=${PLEXUS_DATA_ROOT:-/tmp/adelechinda/plexus_data}
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 export TOKENIZERS_PARALLELISM=false
+# Do not rely on `pip install -e .` having been run in whichever interpreter this host uses.
+# A rebuilt venv without it fails at the first import, and because that failure takes one second
+# the queue then burns through every remaining job at one second each and marks them all attempted.
+export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
 
 # ai-lab2 has a venv in the repo; titan3 runs from a conda env. Both hosts must use interpreters
 # with the same torch build, or a difference between arms could be a difference between libraries.
@@ -80,7 +86,7 @@ claim_gpu() {
   return 1
 }
 
-total=0; done_already=0; ran=0; failed=0
+total=0; done_already=0; ran=0; failed=0; fast_failures=0
 while IFS= read -r line; do
   [[ -z "${line// /}" || "${line#\#}" != "$line" ]] && continue
   name=$(echo "$line" | awk '{print $1}')
@@ -118,10 +124,24 @@ while IFS= read -r line; do
     ran=$(( ran + 1 ))
   else
     code=$?
-    log "  $name FAILED exit $code after $(( $(date +%s) - start ))s -> $job_log"
+    elapsed=$(( $(date +%s) - start ))
+    log "  $name FAILED exit $code after ${elapsed}s -> $job_log"
     log "  $(tail -3 "$job_log" | tr '\n' ' ')"
     failed=$(( failed + 1 ))
-    # Keep going: a later job may not share the cause, and windows are too scarce to waste.
+    # A job that dies in seconds died on import or on argument parsing, which is a property of
+    # this host and not of this job. Continuing would consume the whole queue at a second apiece
+    # and leave every job marked attempted, which is exactly what happened once. Slow failures
+    # are different -- those are per-job, and the queue should carry on past them.
+    if (( elapsed < FAST_FAIL_SECONDS )); then
+      fast_failures=$(( fast_failures + 1 ))
+      if (( fast_failures >= MAX_FAST_FAILURES )); then
+        log "stopping: $fast_failures failures in under ${FAST_FAIL_SECONDS}s each look like a"
+        log "broken environment rather than broken jobs. Fix it, clear logs/queue/*.lock, rerun."
+        exit 3
+      fi
+    else
+      fast_failures=0
+    fi
   fi
 done < "$QUEUE"
 
