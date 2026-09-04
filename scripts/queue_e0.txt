@@ -1,7 +1,10 @@
 # PLEXUS experiment queue. Ordered so that if only one window ever appears, it is spent on the
 # most decisive run. Resumable: a job with a marker in logs/queue/ is skipped.
 #
-#   ./scripts/run_queue.sh scripts/queue_e0.txt
+#   ONLY_GPU=0 ./scripts/run_queue.sh scripts/queue_e0.txt &
+#   ONLY_GPU=1 ./scripts/run_queue.sh scripts/queue_e0.txt &
+#
+# One worker per card. Claims are atomic, so the two never collide on a job.
 #
 # Rationale for the ordering:
 #   1. The timing benchmark costs minutes and sets every schedule decision in RESEARCH_PLAN §6.
@@ -23,3 +26,22 @@ e02_none_nc_s0    scripts/run_experiment.py --task nc --mask-family none        
 e11_hopbias_nc_s0 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E1.1_hopbias_nc_s0
 e12_hopbias_ans_nc_s0 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E1.2_hopbias_answer_nc_s0
 e02_rewire_nc_s0  scripts/run_experiment.py --task nc --mask-family random_rewire --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_rewire_nc_s0
+
+# Seed 1 before any seed 2: a single seed is not a result under the standing rule, so the second
+# seed of a decisive arm is worth more than the third seed of any arm. If the schedule has to be
+# cut, it should be cut at a boundary that leaves two seeds on the arms the claims rest on.
+e01_star_nc_s1    scripts/run_experiment.py --task nc --mask-family star        --seed 1 --epochs 20 --eval-every-epochs 4 --out experiments/E0.1_star_nc_s1
+e02_ego_nc_s1     scripts/run_experiment.py --task nc --mask-family ego         --seed 1 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_ego_nc_s1
+e02_egostar_nc_s1 scripts/run_experiment.py --task nc --mask-family ego_star    --seed 1 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_ego_star_nc_s1
+e11_hopbias_nc_s1 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --seed 1 --epochs 20 --eval-every-epochs 4 --out experiments/E1.1_hopbias_nc_s1
+e12_hopbias_ans_nc_s1 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 1 --epochs 20 --eval-every-epochs 4 --out experiments/E1.2_hopbias_answer_nc_s1
+e02_none_nc_s1    scripts/run_experiment.py --task nc --mask-family none        --seed 1 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_none_nc_s1
+e02_rewire_nc_s1  scripts/run_experiment.py --task nc --mask-family random_rewire --seed 1 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_rewire_nc_s1
+
+e01_star_nc_s2    scripts/run_experiment.py --task nc --mask-family star        --seed 2 --epochs 20 --eval-every-epochs 4 --out experiments/E0.1_star_nc_s2
+e02_ego_nc_s2     scripts/run_experiment.py --task nc --mask-family ego         --seed 2 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_ego_nc_s2
+e02_egostar_nc_s2 scripts/run_experiment.py --task nc --mask-family ego_star    --seed 2 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_ego_star_nc_s2
+e11_hopbias_nc_s2 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --seed 2 --epochs 20 --eval-every-epochs 4 --out experiments/E1.1_hopbias_nc_s2
+e12_hopbias_ans_nc_s2 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 2 --epochs 20 --eval-every-epochs 4 --out experiments/E1.2_hopbias_answer_nc_s2
+e02_none_nc_s2    scripts/run_experiment.py --task nc --mask-family none        --seed 2 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_none_nc_s2
+e02_rewire_nc_s2  scripts/run_experiment.py --task nc --mask-family random_rewire --seed 2 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_rewire_nc_s2

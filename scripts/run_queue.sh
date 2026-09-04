@@ -12,6 +12,14 @@
 # Queue file format: one job per line, `<name> <TAB or spaces> <command line>`. Blank lines and
 # `#` comments ignored. A job whose marker file exists in logs/queue/ is skipped, so the queue is
 # resumable and safe to relaunch.
+#
+# Several workers may share one queue file. Each claims a job by creating a lock *directory*, which
+# is atomic, so two workers never take the same job. Pin each worker to its own card:
+#
+#   ONLY_GPU=0 ./scripts/run_queue.sh scripts/queue_e0.txt &
+#   ONLY_GPU=1 ./scripts/run_queue.sh scripts/queue_e0.txt &
+#
+# A worker killed mid-job leaks its lock; clear it with `rmdir logs/queue/<name>.lock`.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -22,6 +30,8 @@ MIN_FREE_MIB=${MIN_FREE_MIB:-21000}
 STABLE_CHECKS=${STABLE_CHECKS:-3}
 POLL_SECONDS=${POLL_SECONDS:-60}
 MAX_WAIT_HOURS=${MAX_WAIT_HOURS:-96}
+ONLY_GPU=${ONLY_GPU:-}
+WORKER=${WORKER:-${ONLY_GPU:-0}}
 
 export HF_HOME=${HF_HOME:-/tmp/adelechinda/hf}
 export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
@@ -32,9 +42,9 @@ export TOKENIZERS_PARALLELISM=false
 PYTHON="$REPO/.venv/bin/python"
 MARKS="$REPO/logs/queue"
 mkdir -p "$MARKS" "$REPO/logs"
-MAIN_LOG="$REPO/logs/queue_$(date +%Y%m%d_%H%M%S).log"
+MAIN_LOG="$REPO/logs/queue_w${WORKER}_$(date +%Y%m%d_%H%M%S).log"
 
-log() { echo "[$(date '+%F %T')] $*" | tee -a "$MAIN_LOG"; }
+log() { echo "[$(date '+%F %T')] [w$WORKER] $*" | tee -a "$MAIN_LOG"; }
 
 # A reboot empties /tmp (E0.0f). Fail now rather than after waiting hours for a card.
 if ! "$PYTHON" -c "from plexus.models.llada import assert_snapshot_present as a; a()" \
@@ -51,6 +61,7 @@ claim_gpu() {
     while IFS=, read -r idx used total; do
       idx=${idx// /}; used=${used// MiB/}; total=${total// MiB/}
       used=${used// /}; total=${total// /}
+      [[ -n "$ONLY_GPU" && "$idx" != "$ONLY_GPU" ]] && continue
       if (( total - used >= MIN_FREE_MIB )); then
         streak[$idx]=$(( ${streak[$idx]:-0} + 1 ))
         if (( ${streak[$idx]} >= STABLE_CHECKS )); then echo "$idx"; return 0; fi
@@ -75,6 +86,15 @@ while IFS= read -r line; do
     done_already=$(( done_already + 1 ))
     continue
   fi
+
+  # mkdir is the claim: it succeeds for exactly one worker even if several test the same job in
+  # the same instant, which a -e test followed by a touch would not.
+  if ! mkdir "$MARKS/$name.lock" 2>/dev/null; then
+    log "skip $name (claimed by another worker)"
+    done_already=$(( done_already + 1 ))
+    continue
+  fi
+  echo "$WORKER $$ $(date '+%F %T')" > "$MARKS/$name.lock/owner"
 
   log "next job: $name"
   log "  waiting for a card with >= ${MIN_FREE_MIB} MiB free"
