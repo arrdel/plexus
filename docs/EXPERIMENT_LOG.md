@@ -511,3 +511,93 @@ fit for ~13 distinct shapes instead of hundreds.
 the wall-clock table keeps its old numbers with an explicit note that they are pending a clean
 timing. The watcher is relaunched with the fix. `run_experiment.py` now builds all examples
 *before* loading the backbone, so a CPU-side bug costs seconds rather than a GPU window.
+
+---
+
+## E0.0i — the smoke run completes; densities measured; the graded bias reaches the answer row
+
+**Date:** 2026-09-03 (evening)
+
+**Hypothesis.** The harness runs end-to-end on a real 4090 within the memory envelope derived in
+E0.0d, and the graded bias (C3's method) is trainable as implemented.
+
+**Falsifier.** OOM at the padded lengths measured in E0.0h; or no gradient reaching
+`HopBias.values`.
+
+**Setup.** GPU watcher fired at 20:49 on GPU 0 and ran `--smoke` to completion in 19 s. Separately,
+`scripts/measure_densities.py` over 300 real Cora examples per task (CPU only, no GPU).
+
+**Result.**
+
+1. **MEASURED — the smoke run completed.** Peak allocated **18.96 GB** against 24 GB of device
+   memory, comfortably inside the 20.5–21 GB derived in E0.0d. Cora loaded, 8.02 B backbone
+   loaded, LoRA attached at 167.8 M (2.09%), activation checkpointing set on
+   `base_model.model.model`, forward+backward+eval all succeeded. The week 1–3 gate is met.
+
+2. **MEASURED — the smoke run's timing and accuracy are both unusable, for the same reason.**
+   With `effective_batch=128`, `micro_batch=1` and `max_steps=8`, `accum_steps` is 128, so
+   **zero optimiser steps completed**. The reported `nc star acc=62.50 ±9.88 (n=24)` is therefore
+   a randomly-initialised LoRA on 24 examples, not a result, and `history["steps"]` is empty
+   because the logging condition is keyed on optimiser steps. The 5.6 s wall clock is dominated by
+   warmup. **Neither number should be quoted.** `scripts/benchmark_step.py` now exists to take the
+   throughput measurement properly: it discards a configurable warmup and reports the median.
+
+3. **MEASURED — mask density per family, over 300 real examples per task.** No GPU needed;
+   density is a property of the mask and the graph.
+
+   | family | NC ρ | LP ρ |
+   |---|---|---|
+   | `none` | 1.0000 ± 0.0000 | 1.0000 ± 0.0000 |
+   | `star` | 0.4869 ± 0.1604 | 0.3433 ± 0.1228 |
+   | `ego` | 0.4242 ± 0.1389 | 0.2914 ± 0.0786 |
+   | `ego_star` | 0.5820 ± 0.1630 | 0.4391 ± 0.1237 |
+   | `random_rewire` | 0.5812 ± 0.1643 | 0.4321 ± 0.1270 |
+   | `HopBias` | 1.0000 | 1.0000 |
+
+**Reading.**
+
+- **`random_rewire` is density-matched to `ego_star` empirically, to within 0.001 on NC.** That is
+  what it was designed for — it starts from the star and adds the same count of *non-target* edges
+  as `ego` has — and it is now verified rather than intended. Note for anyone reading the code:
+  it is *not* a control for `ego`, and §3 of the paper originally described it as one. Fixed.
+
+- **`star` is DENSER than `ego` (0.487 vs 0.424).** This is a *third* difference between the two
+  masks, on top of the two the plan already names (neighbour–neighbour edges, target reach). It
+  runs in the direction that favours `star`, so TAG-DLM's 30-point gap has a candidate explanation
+  that involves no topology whatsoever. This strengthens C1 more than anything measured so far,
+  and it cost no GPU time.
+
+- **The standard deviations are large** (≈0.16 on a mean of 0.49) because density tracks
+  neighbourhood size and Cora's degree distribution is heavy-tailed (mean 3.90, max 168). A single
+  per-dataset density number would be misleading; report per family with spread.
+
+4. **DERIVED — the graded bias never writes to the answer row.** Found by writing a test that
+   gradients reach `HopBias.values`. The answer `[M]` position belongs to no node span (by the
+   §2 design choice that keeps the instruction globally visible), so `node_to_token_bias` leaves
+   its row unbiased and the graded bias influences the answer only *indirectly*, via the node
+   representations. That is the same indirect route a hard mask has, so it is a fair comparison —
+   but it discards the one thing only a graded bias can express: a *direct*, learnable "how much
+   does a hop-k neighbour count when I answer". Added `HopBias.answer_as_target`, applying to the
+   additive term only; a test asserts the hard families are bit-identical under the flag, since
+   rewriting span ownership for the *gate* would silently redefine `star` and `ego`.
+
+**Caveats.**
+
+- The initial gradient test failed with an all-zero gradient, which was an artefact of the **test
+  double**, not the method: `StubBackbone` read the bias through a `> -1e8` comparison (a step
+  function, no gradient) and reduced over one score axis only, so each position read its own
+  attention row — including the answer's, the one row a graded bias never writes. Fixed to reduce
+  over both axes, which is the faithful stand-in for a 32-layer backbone. **A test double that is
+  wrong in the same place the code is subtle will confirm whatever you already believe.**
+- Densities are measured at k=2, K=10, pad-to-128, seed 0. They will move with K.
+- Still owed: the throughput/MFU measurement (queued as `bench`), and every accuracy.
+
+**Consequence.**
+
+- Queue launched (`scripts/run_queue.sh`, resumable, marker files in `logs/queue/`) with 8 jobs:
+  throughput benchmark ×2, then `star` NC 20 epochs (doubles as the convergence curve at
+  `--eval-every-epochs 4`), `ego`, `ego_star`, `none`, both graded arms, `random_rewire`.
+  As of 23:11 it is waiting; both cards remain held (21198 MiB / 12242 MiB).
+- The `star`-denser-than-`ego` finding should be reported in the paper as a measured third
+  confound, not as a footnote. It is now Appendix Table 3 and is cited from §3.
+- 78 tests pass on ai-lab2 against the real LLaDA remote code (up from 71).
