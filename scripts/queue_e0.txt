@@ -1,0 +1,25 @@
+# PLEXUS experiment queue. Ordered so that if only one window ever appears, it is spent on the
+# most decisive run. Resumable: a job with a marker in logs/queue/ is skipped.
+#
+#   ./scripts/run_queue.sh scripts/queue_e0.txt
+#
+# Rationale for the ordering:
+#   1. The timing benchmark costs minutes and sets every schedule decision in RESEARCH_PLAN §6.
+#   2. E0.1 is the reproduction gate; nothing downstream is interpretable until it passes or is
+#      declared failed. Evaluating every 4 epochs makes it double as the convergence curve that
+#      lever 1 needs, at ~5 extra evaluations.
+#   3. ego then ego_star: the E0.2 fulcrum. If ego_star recovers star's accuracy, TAG-DLM's
+#      stated explanation does not follow, which is claim C2 and does not depend on E0.1 passing.
+#   4. `none` anchors the ladder; HopBias is the proposed method; random_rewire is the density
+#      control and the most droppable arm (§6 lever 5).
+
+bench           scripts/benchmark_step.py --steps 24 --warmup 6 --out experiments/bench_star.json
+bench_fixed2048 scripts/benchmark_step.py --steps 16 --warmup 4 --fixed-seq-len 2048 --out experiments/bench_fixed2048.json
+
+e01_star_nc_s0    scripts/run_experiment.py --task nc --mask-family star        --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E0.1_star_nc_s0
+e02_ego_nc_s0     scripts/run_experiment.py --task nc --mask-family ego         --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_ego_nc_s0
+e02_egostar_nc_s0 scripts/run_experiment.py --task nc --mask-family ego_star    --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_ego_star_nc_s0
+e02_none_nc_s0    scripts/run_experiment.py --task nc --mask-family none        --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_none_nc_s0
+e11_hopbias_nc_s0 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E1.1_hopbias_nc_s0
+e12_hopbias_ans_nc_s0 scripts/run_experiment.py --task nc --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E1.2_hopbias_answer_nc_s0
+e02_rewire_nc_s0  scripts/run_experiment.py --task nc --mask-family random_rewire --seed 0 --epochs 20 --eval-every-epochs 4 --out experiments/E0.2_rewire_nc_s0
