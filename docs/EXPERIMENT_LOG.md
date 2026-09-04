@@ -863,3 +863,66 @@ table. Main body is 9 pages again after tightening; appendix 12.
 
 **Also now running:** all 8 titan3 cards plus 2 on ai-lab2 — Cora ladder ×4 (GPU 0–3), PubMed
 ladder ×4 (GPU 4–7), graded-bias ×2 (ai-lab2), zero-shot sweep sharing GPU 7.
+
+## E0.0n — Node classification does not discriminate, so the grid moves to link prediction (2026-09-04, 10:00–11:00)
+
+**The epoch-4 Cora NC ladder, full 542-example test set, seed 0.** All six arms:
+
+| arm | accuracy | mask density |
+| --- | --- | --- |
+| `ego_star` (ours) | 86.72 ± 1.46 | 0.600 |
+| `HopBias` + answer grading (ours) | 86.53 ± 1.47 | 1.000 |
+| `none` — no structure at all | 86.35 ± 1.47 | 1.000 |
+| `star` — the baseline's default | 86.35 ± 1.47 | 0.509 |
+| `HopBias` (ours) | 85.98 ± 1.49 | 1.000 |
+| `ego` — real topology | 85.61 ± 1.51 | 0.393 |
+
+**Spread 1.11 points, against the 8.00-point seed spread measured in E0.0m.** Training loss on the
+graded arms is already 0.0004, so this is convergence and not an early snapshot. **Nothing
+discriminates on this task — including our own method.** Our `star` is 86.35 against the reported
+90.96, so E0.1 fails the 1.0-point reproduction gate as it stands.
+
+This is claim C1 confirmed about as emphatically as it can be: on Cora node classification, *how*
+the graph is described to the model makes no measurable difference. It is a real diagnostic result.
+It is **not** evidence that our method beats the baseline, because here nothing beats anything.
+
+**The gap this exposed, which had been sitting in plain sight.** TAG-DLM's dramatic number — the one
+this entire project is built around — is **link prediction**: 91.62 with the star mask collapsing to
+61.76 with real ego topology, a 30-point effect. Their paper reports no comparable NC ablation.
+**Our grid was entirely node classification.** We had been trying to explain a 30-point LP
+phenomenon using a task whose total between-arm spread is 1.11 points.
+
+The measured densities said so in advance. On LP the two families separate much further than on NC:
+
+| task | `none` | `star` | `ego` | `ego_star` | `random_rewire` |
+| --- | --- | --- | --- | --- | --- |
+| NC | 1.000 | 0.487 | 0.424 | 0.582 | 0.581 |
+| LP | 1.000 | 0.343 | 0.291 | 0.439 | 0.432 |
+
+The LP prompt carries **two** endpoints rather than one target, so a target-centred star abstraction
+has strictly more to abstract away, and each family's departure from full attention is larger.
+
+**What was stopped, and what it cost.** The PubMed NC grid on cards 4–7 was killed mid-flight at
+step 20/277 — still inside epoch 0, so **no evaluation had landed and no result was lost**. Its
+partial output directories and queue locks were cleared, leaving it resumable. The justification is
+E0.0m finding (2): PubMed NC is at 89.67 with no graph at all against a reported 96.30, so it is the
+least informative grid we own. Cards 0–3 (Cora NC) were left alone and will run the **full 20
+epochs** rather than stopping at the convergence elbow, so the paper can show the whole curve.
+
+**Launched:** `scripts/queue_lp.txt`, 21 jobs = 7 arms × 3 seeds, `--task lp --dataset cora
+--epochs 6 --eval-every-epochs 2`, four workers on cards 4–7. 3912 train pairs / 452 test, 183 steps
+per epoch, padded tokens min/mean/max 152/1356/1845 so S=2048 holds with room. ~750 tok/s per card,
+19.75 GB peak. 6 epochs = 23,472 examples, within 9% of the Cora NC 20-epoch budget of 32,480 — the
+comparison is budget-matched, not epoch-matched.
+
+**These are also the first runs to store per-example predictions** (commit `2b5e0d1`), so
+`scripts/compare_decisions.py` and its McNemar test become usable for the first time. That matters
+here more than anywhere: if the LP arms land close together the way the NC arms did, accuracy alone
+cannot distinguish "the mask changed nothing" from "the mask traded errors", and on LP we would very
+much like to know which.
+
+**Step-1 losses, recorded with the E0.0m caveat attached.** Frozen-model loss under each LP mask:
+`none` 1.0622, `star` 0.3855, `ego` 0.6433, `ego_star` 0.8747. The `none`-to-`star` ratio is 2.76×,
+close to NC's 2.87×, but `ego_star` and `ego` have **swapped** relative to NC. **No inference is
+drawn from this.** E0.0m established that loss ordering under a mask does not predict accuracy
+ordering under it, and the whole point of recording that lesson was to not spend it.
