@@ -926,3 +926,49 @@ much like to know which.
 close to NC's 2.87×, but `ego_star` and `ego` have **swapped** relative to NC. **No inference is
 drawn from this.** E0.0m established that loss ordering under a mask does not predict accuracy
 ordering under it, and the whole point of recording that lesson was to not spend it.
+
+## E0.0o — ai-lab2 released; the first two completed 20-epoch runs (2026-09-04, 16:45–17:00)
+
+**Why.** The 4090s were needed elsewhere. Freeing them was a scheduling request, not a scientific
+decision, but it forced the first proper harvest of that host.
+
+**What was already finished.** Both graded arms had run to completion, 20 epochs, 5 evaluations
+each, roughly 7 hours per arm:
+
+| arm | accuracy (Cora NC, seed 0, n=542) |
+| --- | --- |
+| \textsc{HopBias} + answer grading (ours) | **89.48** |
+| \textsc{HopBias} (ours) | 87.64 |
+
+**These are the first completed training runs in the project.** Every other number to date has come
+from a mid-flight evaluation. They are also the first cells in `tab:ladder-nc` that are not
+`\pending`.
+
+**The internal comparison is the interesting part, and it is clean.** Same seed, same 20-epoch
+budget, same harness, one flag apart: grading the answer row is worth **+1.84 points**. That is the
+gap §5.3 predicted from the design fact that `[M]` belongs to no node span and is therefore exempt
+from the additive term under the standard lift. The prediction was made before the runs and the
+measurement agrees with it. It is one seed, so it is a signal rather than a result, but it is the
+first evidence that the answer-position treatment is load-bearing rather than a detail.
+
+**What it does not show.** 89.48 is currently the highest completed number in the project, above
+`star`'s 89.30 at epoch 12 on titan3. That comparison is **not** valid: `star` has not finished its
+20 epochs, and E0.0n showed the arms still moving between epochs 8 and 12. No claim is made until
+the mask families complete.
+
+**Procedure, given E0.0l.** Artefacts were pulled *before* anything was killed, then verified by
+md5 against the source (8 of 8 files identical) and only then were the processes stopped. Pulled to
+`experiments/ailab2/` rather than merged into `experiments/`, because `collect_results.py` is
+recursive and a separate subtree keeps the provenance of each host visible. Workers were killed
+before their children so the queue could not launch a replacement job.
+
+**Cost of stopping.** Two runs lost mid-flight, both at epoch 4 with one evaluation each:
+`e02_rewire_nc_s0` and `e11_hopbias_nc_s1`. Their queue locks were cleared so both remain runnable.
+The seed-1 graded arm is the more valuable of the two, since the +1.84 point answer-grading gap
+currently rests on a single seed and E0.0m measured an 8.00-point seed spread on this benchmark.
+There is no spare capacity to re-run it: all 8 titan3 cards are busy with the Cora NC ladder
+(0--3) and the LP grid (4--7).
+
+**Neither run stored per-example predictions**, since both predate commit `2b5e0d1`, so the
+McNemar comparison cannot be applied to the +1.84 point gap. The LP grid remains the first place it
+will be usable.
