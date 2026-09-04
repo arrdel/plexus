@@ -1,0 +1,51 @@
+# Cora link prediction: the task the baseline's headline result is actually about.
+#
+#   ONLY_GPU=4 ./scripts/run_queue.sh scripts/queue_lp.txt &   ... one per card
+#
+# Why this queue should have existed before the node-classification one.
+#
+# The result this whole paper responds to is an LP result: 91.62 with the star mask, 61.76 with the
+# ego mask, a thirty-point collapse. There is no comparable NC ablation in the baseline. Our grid
+# was entirely NC, and at epoch 4 seed 0 the six NC arms land inside 1.11 points of each other --
+# ego_star 86.72, HopBias+ans 86.53, none 86.35, star 86.35, HopBias 85.98, ego 85.61 -- against a
+# measured 8-point seed spread. On Cora NC nothing discriminates, including our own method, which
+# is a clean diagnostic result and no evidence at all about the mechanism the paper proposes.
+#
+# LP is where the phenomenon lives, for a reason the structure argument predicts: the LP prompt has
+# two endpoints rather than one target, so `star` and `ego` differ far more there than on NC, and
+# the measured densities show it -- star 0.343 against ego 0.291 on LP, versus 0.487 against 0.424
+# on NC. If the graded bias is going to express something a binary gate cannot, this is the task on
+# which it has to show.
+#
+# 6 epochs, evaluation every 2. LP has 3912 train pairs, so matching Cora NC's 32480-example budget
+# would need 8 epochs; 6 gives 23472 and the NC runs reach a training loss of 0.02 by epoch 4 and
+# 0.0004 by epoch 6, so the budget is not the binding constraint on this task -- overfitting is.
+# Evaluating every 2 epochs gives the curve that sets the final budget.
+#
+# The test split is 452 pairs. Binomial standard error there is about 1.4 points at 90% accuracy
+# and 2.4 at chance, so the three-seed rule matters more here than on NC, not less.
+
+lp_none_s0     scripts/run_experiment.py --task lp --dataset cora --mask-family none          --seed 0 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_none_lp_s0
+lp_star_s0     scripts/run_experiment.py --task lp --dataset cora --mask-family star          --seed 0 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_star_lp_s0
+lp_ego_s0      scripts/run_experiment.py --task lp --dataset cora --mask-family ego           --seed 0 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_ego_lp_s0
+lp_egostar_s0  scripts/run_experiment.py --task lp --dataset cora --mask-family ego_star      --seed 0 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_ego_star_lp_s0
+
+lp_hopbias_s0  scripts/run_experiment.py --task lp --dataset cora --mask-family none --hop-bias-buckets 6 --seed 0 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_hopbias_lp_s0
+lp_hopbias_ans_s0 scripts/run_experiment.py --task lp --dataset cora --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 0 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_hopbias_answer_lp_s0
+lp_rewire_s0   scripts/run_experiment.py --task lp --dataset cora --mask-family random_rewire --seed 0 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_rewire_lp_s0
+
+lp_none_s1     scripts/run_experiment.py --task lp --dataset cora --mask-family none          --seed 1 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_none_lp_s1
+lp_star_s1     scripts/run_experiment.py --task lp --dataset cora --mask-family star          --seed 1 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_star_lp_s1
+lp_ego_s1      scripts/run_experiment.py --task lp --dataset cora --mask-family ego           --seed 1 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_ego_lp_s1
+lp_egostar_s1  scripts/run_experiment.py --task lp --dataset cora --mask-family ego_star      --seed 1 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_ego_star_lp_s1
+lp_hopbias_s1  scripts/run_experiment.py --task lp --dataset cora --mask-family none --hop-bias-buckets 6 --seed 1 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_hopbias_lp_s1
+lp_hopbias_ans_s1 scripts/run_experiment.py --task lp --dataset cora --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 1 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_hopbias_answer_lp_s1
+lp_rewire_s1   scripts/run_experiment.py --task lp --dataset cora --mask-family random_rewire --seed 1 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_rewire_lp_s1
+
+lp_none_s2     scripts/run_experiment.py --task lp --dataset cora --mask-family none          --seed 2 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_none_lp_s2
+lp_star_s2     scripts/run_experiment.py --task lp --dataset cora --mask-family star          --seed 2 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_star_lp_s2
+lp_ego_s2      scripts/run_experiment.py --task lp --dataset cora --mask-family ego           --seed 2 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_ego_lp_s2
+lp_egostar_s2  scripts/run_experiment.py --task lp --dataset cora --mask-family ego_star      --seed 2 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_ego_star_lp_s2
+lp_hopbias_s2  scripts/run_experiment.py --task lp --dataset cora --mask-family none --hop-bias-buckets 6 --seed 2 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_hopbias_lp_s2
+lp_hopbias_ans_s2 scripts/run_experiment.py --task lp --dataset cora --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 2 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_hopbias_answer_lp_s2
+lp_rewire_s2   scripts/run_experiment.py --task lp --dataset cora --mask-family random_rewire --seed 2 --epochs 6 --eval-every-epochs 2 --out experiments/titan3/L_rewire_lp_s2
