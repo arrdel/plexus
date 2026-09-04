@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
@@ -28,7 +29,6 @@ from plexus.masks import (  # noqa: E402
     LinearisedGraph,
     build_attention_bias,
     mask_density,
-    pairwise_hops,
 )
 
 # A colour-blind-safe set; the paper is read in greyscale often enough to matter.
@@ -87,7 +87,7 @@ def _annotate_spans(ax, g: LinearisedGraph, n_hop1: int = 3):
     groups = [(0, "T", RED), (1, "$\\mathcal{N}_1$", BLUE),
               (1 + n_hop1, "$\\mathcal{N}_2$", GREEN)]
     ends = [1, 1 + n_hop1, g.n_nodes]
-    for (start, label, colour), end in zip(groups, ends):
+    for (start, label, colour), end in zip(groups, ends, strict=True):
         lo = g.spans[start][0]
         hi = g.spans[end - 1][1]
         mid = (lo + hi) / 2 - 0.5
@@ -101,7 +101,7 @@ def fig_mask_ladder(out: Path):
     g = demo_graph()
     fig, axes = plt.subplots(1, len(FAMILY_ORDER), figsize=(7.0, 1.95))
 
-    for ax, fam in zip(axes, FAMILY_ORDER):
+    for ax, fam in zip(axes, FAMILY_ORDER, strict=True):
         bias = build_attention_bias([g], family=fam, dtype=torch.float32,
                                     generator=torch.Generator().manual_seed(0))
         m = (bias[0, 0] > MASK_BIAS / 2).numpy().astype(float)
@@ -119,7 +119,8 @@ def fig_mask_ladder(out: Path):
         _annotate_spans(ax, g)
 
         ax.set_title(f"{FAMILY_LABEL[fam]}\n$\\rho$ = {dens:.2f}", fontsize=7.2, pad=3)
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
 
     axes[0].set_ylabel("query (reader)", fontsize=7)
     fig.legend(handles=[
@@ -233,7 +234,8 @@ def fig_graded_bias(out: Path):
             ax.axhline(s - 0.5, lw=0.2, color="0.4", alpha=0.55)
             ax.axvline(s - 0.5, lw=0.2, color="0.4", alpha=0.55)
         ax.set_title(title, fontsize=7.2, pad=3)
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
 
         # The value multiset. Gated entries are -1e9, plotted at the clip edge with a marker.
         axh = axes[1, j]
@@ -298,9 +300,10 @@ def fig_seq_lengths(out: Path, stats_path: Path | None):
     x = np.arange(2)
     ax2.bar(x - 0.19, fixed_rel, 0.36, label="fixed 2048", color=GREY)
     ax2.bar(x + 0.19, dyn_rel, 0.36, label="pad to 128", color=GREEN)
-    for xi, v in zip(x + 0.19, dyn_rel):
+    for xi, v in zip(x + 0.19, dyn_rel, strict=True):
         ax2.text(xi, v + 0.03, f"{v:.3f}$\\times$", ha="center", fontsize=6.8)
-    ax2.set_xticks(x); ax2.set_xticklabels(labels, fontsize=6.8)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(labels, fontsize=6.8)
     ax2.set_ylabel("cost relative to fixed 2048")
     ax2.set_ylim(0, 1.22)
     ax2.legend(frameon=False, fontsize=6.8)
@@ -333,7 +336,7 @@ def fig_results(out: Path, exp_dir: Path):
     accs = [100 * r["accuracy"] for _, r in rows]
     dens = [r.get("mask_density", float("nan")) for _, r in rows]
     ax.scatter(dens, accs, c=range(len(rows)), cmap="viridis", s=26, zorder=3)
-    for n, d, a in zip(names, dens, accs):
+    for n, d, a in zip(names, dens, accs, strict=True):
         ax.annotate(n.split("_")[0], (d, a), fontsize=5.6,
                     xytext=(3, 2), textcoords="offset points")
     ax.set_xlabel("mask density $\\rho$")

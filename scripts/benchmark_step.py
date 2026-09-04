@@ -34,8 +34,32 @@ from plexus.models.llada import (
     load_tokenizer,
 )
 
-# bf16 dense matmul peak, measured on this 4090 in E0.0d via an 8192^3 matmul.
-PEAK_TFLOPS = 149.5
+# bf16 dense matmul peak per device, each measured on that device via an 8192^3 matmul rather
+# than taken from a datasheet. Reporting MFU against the wrong device's peak silently rescales
+# every utilisation number, which is how the plan's earlier estimates went wrong by a factor of
+# two, so an unmeasured device measures its own peak instead of borrowing one.
+PEAK_TFLOPS_BY_DEVICE = {
+    "NVIDIA GeForce RTX 4090": 149.5,   # E0.0d
+}
+
+
+def measure_peak_tflops(device: str, n: int = 8192, iters: int = 12) -> float:
+    """Time a large bf16 matmul to get this device's achievable dense peak."""
+    a = torch.randn(n, n, device=device, dtype=torch.bfloat16)
+    b = torch.randn(n, n, device=device, dtype=torch.bfloat16)
+    for _ in range(3):
+        a @ b
+    torch.cuda.synchronize(device)
+    t0 = time.perf_counter()
+    for _ in range(iters):
+        a @ b
+    torch.cuda.synchronize(device)
+    dt = (time.perf_counter() - t0) / iters
+    del a, b
+    torch.cuda.empty_cache()
+    return 2 * n**3 / dt / 1e12
+
+
 # LoRA fwd+bwd: 2N forward, ~4N backward (activation grads through frozen weights dominate;
 # the 168 M adapter params are negligible). N = 8.02e9.
 FLOPS_PER_TOKEN = 6 * 8.02e9
@@ -54,6 +78,9 @@ def main():
     p.add_argument("--fixed-seq-len", type=int, default=None,
                    help="pad every example to this, to quantify what dynamic padding saves")
     p.add_argument("--out", default=None)
+    p.add_argument("--peak-tflops", type=float, default=None,
+                   help="override the device's bf16 peak; default is the stored measurement for "
+                        "this GPU, or a fresh measurement if the GPU is not in the table")
     args = p.parse_args()
 
     tag = load_tag(args.dataset, args.data_root, seed=0)
@@ -107,16 +134,25 @@ def main():
     med_tok = statistics.median(toks)
     tok_per_s = sum(toks) / sum(times)
     tflops = tok_per_s * FLOPS_PER_TOKEN / 1e12
-    mfu = 100 * tflops / PEAK_TFLOPS
     peak_gb = torch.cuda.max_memory_allocated(args.device) / 1e9
+
+    gpu = torch.cuda.get_device_name(args.device)
+    if args.peak_tflops is not None:
+        peak, peak_src = args.peak_tflops, "given on the command line"
+    elif gpu in PEAK_TFLOPS_BY_DEVICE:
+        peak, peak_src = PEAK_TFLOPS_BY_DEVICE[gpu], "stored measurement for this GPU"
+    else:
+        peak = measure_peak_tflops(args.device)
+        peak_src = "measured just now on this GPU"
+    mfu = 100 * tflops / peak
 
     print("\n" + "=" * 68)
     print(f"steady state over {len(steady)} steps (first {args.warmup} discarded)")
     print(f"  median step        {med_t * 1000:8.1f} ms  at median {med_tok:.0f} tokens")
     print(f"  min / max step     {min(times) * 1000:8.1f} / {max(times) * 1000:.1f} ms")
     print(f"  throughput         {tok_per_s:8.1f} tokens/s")
-    print(f"  effective          {tflops:8.1f} TFLOPs  of {PEAK_TFLOPS} peak")
-    print(f"  MFU                {mfu:8.1f} %")
+    print(f"  effective          {tflops:8.1f} TFLOPs  of {peak:.1f} peak")
+    print(f"  MFU                {mfu:8.1f} %   ({gpu}, peak {peak_src})")
     print(f"  peak memory        {peak_gb:8.2f} GB")
 
     # What this implies for the runs the plan is scheduled around.
@@ -130,6 +166,7 @@ def main():
     summary = {
         "median_step_s": med_t, "tokens_per_s": tok_per_s, "tflops": tflops,
         "mfu_percent": mfu, "peak_gb": peak_gb, "n_steady": len(steady),
+        "gpu": gpu, "peak_tflops": peak, "peak_tflops_source": peak_src,
         "warmup": args.warmup, "mask_family": args.mask_family,
         "pad_to_multiple_of": args.pad_to_multiple_of,
         "fixed_seq_len": args.fixed_seq_len,

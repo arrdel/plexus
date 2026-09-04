@@ -1,0 +1,96 @@
+{
+  "median_step_s": 1.5176990330219269,
+  "tokens_per_s": 822.0473786652407,
+  "tflops": 39.556919861371384,
+  "mfu_percent": 36.38580721124962,
+  "peak_gb": 20.37706496,
+  "n_steady": 10,
+  "gpu": "NVIDIA RTX A6000",
+  "peak_tflops": 108.7152461170116,
+  "peak_tflops_source": "measured just now on this GPU",
+  "warmup": 3,
+  "mask_family": "star",
+  "pad_to_multiple_of": 128,
+  "fixed_seq_len": null,
+  "padded_len_mean": 1250.4615384615386,
+  "records": [
+    {
+      "step": 0,
+      "seconds": 2.0469181165099144,
+      "tokens": 1280,
+      "warmup": true
+    },
+    {
+      "step": 1,
+      "seconds": 1.377281092107296,
+      "tokens": 1152,
+      "warmup": true
+    },
+    {
+      "step": 2,
+      "seconds": 1.1897308602929115,
+      "tokens": 1024,
+      "warmup": true
+    },
+    {
+      "step": 3,
+      "seconds": 1.5171348750591278,
+      "tokens": 1280,
+      "warmup": false
+    },
+    {
+      "step": 4,
+      "seconds": 1.518263190984726,
+      "tokens": 1280,
+      "warmup": false
+    },
+    {
+      "step": 5,
+      "seconds": 2.1431474164128304,
+      "tokens": 1664,
+      "warmup": false
+    },
+    {
+      "step": 6,
+      "seconds": 1.4292895421385765,
+      "tokens": 1152,
+      "warmup": false
+    },
+    {
+      "step": 7,
+      "seconds": 1.1929915770888329,
+      "tokens": 1024,
+      "warmup": false
+    },
+    {
+      "step": 8,
+      "seconds": 1.5226376429200172,
+      "tokens": 1280,
+      "warmup": false
+    },
+    {
+      "step": 9,
+      "seconds": 1.1954014375805855,
+      "tokens": 1024,
+      "warmup": false
+    },
+    {
+      "step": 10,
+      "seconds": 1.5240847989916801,
+      "tokens": 1280,
+      "warmup": false
+    },
+    {
+      "step": 11,
+      "seconds": 2.143564596772194,
+      "tokens": 1664,
+      "warmup": false
+    },
+    {
+      "step": 12,
+      "seconds": 1.3843635991215706,
+      "tokens": 1152,
+      "warmup": false
+    }
+  ]
+}
