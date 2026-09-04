@@ -656,3 +656,81 @@ measured 149.5 TFLOP/s bf16 matmul peak, not a vendor figure.
 - Editing a bash script while bash is executing it will corrupt the running process, because bash
   reads the file lazily by byte offset. The in-flight E0.1 was preserved by pre-claiming its lock,
   killing only the parent shell, and letting the orphaned python child continue.
+
+---
+
+## E0.0k — titan3 freed; PubMed loader; the grid now runs on six GPUs (2026-09-04, 07:00–07:50)
+
+**Context.** titan3's eight A6000s, fully booked by another user throughout E0.0d–E0.0j, came
+free. The workspace is *on* titan3, so this is local, and the 15 GB LLaDA snapshot was already
+in `checkpoints/hf`.
+
+**What had to be true before using it.**
+
+1. **Library parity, not just "it runs".** titan3's base conda python is 3.13 with
+   torch 2.11+cu130 against a CUDA 12.1 driver — CUDA 13 is a major-version bump, so
+   `torch.cuda.is_available()` was False. The existing `plexus` conda env already had
+   torch 2.5.1+cu121, an exact match for ai-lab2, but `transformers` 4.49.0/`peft` 0.14.0 against
+   ai-lab2's 4.57.6/0.20.0. Aligned them. **This is not pedantry: with arms split across two
+   machines, a version difference between hosts is indistinguishable from an effect of the mask.**
+   For a paper whose entire argument is that the baseline attributed a gain to the wrong cause,
+   shipping that same error would be self-refuting.
+2. Cora had to be copied (1.5 GB, mostly the McCallum extractions). A first pass excluded
+   `mccallum/` and three tests failed — the exclusion dropped the titles and abstracts.
+3. **78 tests pass on titan3**, identical to ai-lab2.
+
+**Throughput on A6000.** 839 tok/s solo, ~790 under four-way concurrency; 20.4 GB peak.
+**MFU was reported as 27.0% and that was wrong** — `benchmark_step.py` hardcoded the 4090's
+149.5 TFLOP/s peak. The A6000's own measured bf16 peak is 108.7 TFLOP/s, giving **36.4%**, which
+is the figure comparable to the 4090's 41.6%. The script now measures an unknown device's peak
+rather than borrowing one. *Dividing by the wrong constant is the same class of error as the
+throughput mistakes in E0.0j, and it is the third time in this project an unmeasured constant
+produced a plausible wrong number.*
+
+**Now running: six concurrent arms.**
+
+| host | GPU | arm |
+| --- | --- | --- |
+| titan3 | 0–3 | `star`, `none`, `ego`, `ego_star` — NC seed 0, 20 epochs |
+| ai-lab2 | 0–1 | `star`, `ego_star` — NC seed 0, 20 epochs |
+
+The overlap is deliberate. `star` s0 and `ego_star` s0 run on both a 4090 and an A6000, which
+**measures the hardware noise floor for free**: no difference between arms smaller than the
+same-seed cross-machine gap is interpretable. `collect_results.py` now aggregates by *seed*, not
+by run, so replicates do not masquerade as extra seeds and deflate the standard deviation;
+`replicate_spread` reports the gap separately and the paper has a macro for it.
+
+Step-1 losses, noisy but suggestive: `none` 0.3325, `ego` 0.1793, `ego_star` 0.1357,
+`star` 0.1160. The ordering is the ladder's expected ordering *before a single optimiser step*,
+which is consistent with the masks changing task difficulty rather than teaching topology.
+
+**PubMed loader (E-plan item long outstanding).**
+
+- Source: TAPE's `PubMed.zip` (LINQS Pubmed-Diabetes + `pubmed.json` titles/abstracts).
+  19717 nodes, 44324 undirected edges after dropping self-loops and duplicates (README claims
+  44338 links), 3 classes, text coverage **0.9999**.
+- **Text is joined by PMID, not by position.** TAPE reads `pubmed.json` positionally, which is
+  correct only while its order matches the NODE file's. A wrong join pairs every node with a
+  neighbouring paper's abstract and is invisible in an accuracy number.
+- **The label mapping is verified, not assumed.** A permuted mapping raises no exception and ruins
+  every number. Probe vocabularies per class give:
+
+  | class | animal | iddm | niddm |
+  | --- | --- | --- | --- |
+  | Experimental | **0.995** | 0.081 | 0.021 |
+  | Type 1 | 0.776 | **0.413** | 0.029 |
+  | Type 2 | 0.798 | 0.236 | **0.231** |
+
+  My first version of this check read the matrix *row-wise* and appeared to fail: animal-model
+  vocabulary is common to the whole diabetes corpus, so it is the most frequent probe in every
+  class. Read down the columns — which class is most *enriched* — each probe lands on its own
+  class. **A check that is uninformative is worse than no check, because it looks like evidence.**
+- 3 epochs, not 20: PubMed's train split is 11830 against Cora's 1624, so equal epochs would give
+  PubMed 7.3× the optimisation budget (90 h/arm) and confound dataset with budget. 3 × 11830 =
+  35490 examples against Cora's 20 × 1624 = 32480, within 9%. Queue written, not launched.
+
+**Caveat to check first, recorded before any real PubMed result exists.** A smoke run with **no
+completed optimiser step** scored 91.67 (n=24) on PubMed NC, against TAG-DLM's reported 96.30, on
+a 3-class problem. If the real `none` arm confirms it, **PubMed NC is close to saturated by text
+alone and cannot discriminate between structure encodings** — which would itself be a finding, and
+is why `none` is first in the PubMed queue rather than last. 82 tests pass.
