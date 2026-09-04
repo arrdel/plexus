@@ -26,6 +26,14 @@ class Result:
     task: str
     seed: int
     extra: dict[str, float] = field(default_factory=dict)
+    # Per-example predictions and gold labels, in evaluation order. Kept because accuracy alone
+    # cannot answer the sharpest form of the question this project asks: two mask families can
+    # reach the same accuracy either by deciding the same examples the same way, or by trading
+    # errors. Only the first means the mask changed nothing that mattered, and distinguishing them
+    # needs the decisions, not their sum. Evaluation order is deterministic given the seed, so
+    # entry i of one run is the same example as entry i of another with the same seed and task.
+    predictions: list[int] = field(default_factory=list)
+    labels: list[int] = field(default_factory=list)
 
     @property
     def stderr(self) -> float:

@@ -127,6 +127,8 @@ def evaluate(
         mask_density=densities[0] if densities else float("nan"),
         task=cfg.task,
         seed=cfg.seed,
+        predictions=list(preds),
+        labels=list(labels),
     )
 
 
