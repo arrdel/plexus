@@ -41,6 +41,9 @@ def main():
     p.add_argument("--limit", type=int, default=None)
     # Deliberately generous so nothing is truncated while measuring what is actually needed.
     p.add_argument("--probe-seq-len", type=int, default=8192)
+    p.add_argument("--json", default=None,
+                   help="also dump the raw per-example lengths, so the paper's figure is drawn "
+                        "from this measurement rather than re-derived from a second run")
     args = p.parse_args()
 
     tag = load_tag(args.dataset, args.data_root, seed=args.seed)
@@ -90,6 +93,21 @@ def main():
               f"max {max(padded):5d}   linear {lin:5.3f}x  quadratic {quad:5.3f}x")
     print("  (linear terms are the projections; quadratic are the bias and the score matrix, "
           "which a dense float bias forces to be materialised)")
+
+    if args.json:
+        import json
+        from pathlib import Path
+
+        out = Path(args.json)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({
+            "task": args.task, "dataset": args.dataset, "seed": args.seed,
+            "k_hops": args.k_hops, "max_neighbours": args.max_neighbours,
+            "probe_seq_len": args.probe_seq_len,
+            "n_dropped_blocks": dropped,
+            "lengths": lengths, "nodes": nodes,
+        }, indent=1))
+        print(f"\nwrote {out}")
 
 
 if __name__ == "__main__":
