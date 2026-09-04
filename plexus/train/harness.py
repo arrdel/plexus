@@ -51,6 +51,7 @@ class TrainConfig:
     # Graded bias (Phase 1). None means a hard mask family only.
     hop_bias_buckets: int | None = None
     hop_bias_init: float = 0.0
+    hop_bias_answer_as_target: bool = False
 
     device: str = "cuda:0"
     bias_dtype: str = "bfloat16"
@@ -83,7 +84,7 @@ def _make_hop_bias(cfg: TrainConfig, device: str) -> HopBias | None:
         (cfg.hop_bias_buckets,), cfg.hop_bias_init, dtype=torch.float32, device=device
     )
     values = torch.nn.Parameter(values)
-    return HopBias(values=values)
+    return HopBias(values=values, answer_as_target=cfg.hop_bias_answer_as_target)
 
 
 @torch.no_grad()

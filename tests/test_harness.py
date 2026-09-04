@@ -14,7 +14,9 @@ from __future__ import annotations
 import torch
 
 from plexus.data.examples import build_nc_examples, collate
+from plexus.masks import HopBias
 from plexus.metrics import Result, aggregate, overlaps
+from plexus.models.llada import answer_logits, answer_loss
 from plexus.train import TrainConfig, evaluate, train
 from tests.test_data import toy_tag
 from tests.test_prompts import FakeTokenizer
@@ -41,12 +43,33 @@ class StubBackbone(torch.nn.Module):
         self.embed = torch.nn.Embedding(1_000_000, 16)
         self.head = torch.nn.Linear(16, VOCAB)
         self.bias_sensitivity = torch.nn.Parameter(torch.zeros(1))
+        self.graded_sensitivity = torch.nn.Parameter(torch.ones(1))
 
     def forward(self, input_ids, attention_bias=None):
         h = self.embed(input_ids)
         if attention_bias is not None:
             readable = (attention_bias[:, 0] > -1e8).float().mean(dim=-1, keepdim=True)
             h = h + self.bias_sensitivity * readable
+
+            # A second, *differentiable* read of the bias values. The comparison above is a step
+            # function, so it passes no gradient back to a learnable bias -- a stub that only read
+            # the bias that way would report "no gradient reached the parameter" for a graded bias
+            # that is in fact wired correctly. Gated entries are excluded through a detached
+            # predicate so they contribute no gradient and, being exactly 0 at the kept positions
+            # of every hard mask, leave the hard-mask tests numerically untouched.
+            #
+            # Reduced over *both* score axes, not just the last. Reducing only the last axis makes
+            # each position read its own attention row, and the answer [M] token's row is the one
+            # row a graded bias never writes to: the answer position belongs to no node span, so
+            # `node_to_token_bias` leaves it unbiased by construction. A stub that read only that
+            # row therefore reports an all-zero gradient for a correctly wired method. The real
+            # backbone has 32 layers in which a bias anywhere reaches the answer token, so a
+            # whole-matrix reduction is the faithful stand-in.
+            b = attention_bias[:, 0]
+            kept = (b > -1e8).detach()
+            graded = torch.where(b > -1e8, b, torch.zeros_like(b))
+            graded = (graded.to(h.dtype) * kept.to(h.dtype)).mean(dim=(-2, -1))
+            h = h + self.graded_sensitivity * graded[:, None, None]
         return StubOutput(self.head(h))
 
 
@@ -207,6 +230,147 @@ def test_single_seed_is_never_called_separable():
     b = aggregate([Result(accuracy=0.60, n=542, mask_family="ego",
                           mask_density=0.8, task="nc", seed=0)])
     assert overlaps(a, b)
+
+
+def test_learnable_hop_bias_receives_gradient():
+    """C3's method must actually train, not merely be representable.
+
+    The graded bias is the proposed contribution, and its whole appeal is that the optimiser can
+    *learn* how much topology should matter. If gradients do not reach `HopBias.values` the run
+    still completes and still reports an accuracy -- it would just be the unmodified model with a
+    constant offset, and we would have reported a null result as a method.
+
+    The path is easy to break: the bias is assembled on CPU by `build_attention_bias` via
+    in-place index assignment into a `torch.zeros`, cast to bf16, then moved to the device before
+    reaching the attention scores.
+    """
+    tag, tok, ex = make_examples(6)
+    model = StubBackbone()
+    hb = HopBias(values=torch.nn.Parameter(torch.zeros(4)))
+
+    batch = collate(ex[:1], family="none", hop_bias=hb, device="cpu", bias_dtype=torch.float32)
+    assert batch["attention_bias"].requires_grad, "bias is detached from the parameter"
+
+    logits = answer_logits(model, batch["input_ids"], batch["attention_bias"],
+                           batch["answer_pos"])
+    answer_loss(logits, batch["target_token_ids"]).backward()
+
+    assert hb.values.grad is not None, "no gradient reached HopBias.values"
+    assert hb.values.grad.abs().sum() > 0, "gradient reached the parameter but is all zero"
+
+
+def test_hop_bias_gradient_survives_bf16_bias_construction():
+    """The training default is a bf16 bias; the cast must not sever the graph."""
+    tag, tok, ex = make_examples(6)
+    model = StubBackbone()
+    hb = HopBias(values=torch.nn.Parameter(torch.zeros(4)))
+
+    batch = collate(ex[:1], family="none", hop_bias=hb, device="cpu",
+                    bias_dtype=torch.bfloat16)
+    logits = answer_logits(model, batch["input_ids"], batch["attention_bias"],
+                           batch["answer_pos"])
+    answer_loss(logits, batch["target_token_ids"]).backward()
+    assert hb.values.grad is not None and hb.values.grad.abs().sum() > 0
+
+
+def test_train_optimises_the_hop_bias_when_enabled():
+    """End-to-end through the harness: the bias values must move away from their init."""
+    tag, tok, ex = make_examples(6)
+    model = StubBackbone()
+    cfg = base_cfg(epochs=6, lr=1e-1, hop_bias_buckets=4, effective_batch=2,
+                   log_every_steps=1000)
+
+    # `_make_hop_bias` is called inside `train`, so capture the parameter it creates. Checking
+    # `.grad` afterwards would prove nothing either way -- the harness zeroes with
+    # `set_to_none=True`, so `.grad` is None after every optimiser step whether or not the
+    # parameter was ever optimised. Displacement from the init is the assertion that bites.
+    import plexus.train.harness as harness
+
+    original = harness._make_hop_bias
+    created = {}
+
+    def spy(c, device):
+        hb = original(c, device)
+        created["hb"] = hb
+        return hb
+
+    harness._make_hop_bias = spy
+    try:
+        hist = train(model, ex, cfg)
+    finally:
+        harness._make_hop_bias = original
+
+    hb = created.get("hb")
+    assert hb is not None, "hop bias was never created"
+    assert not torch.allclose(hb.values.detach(), torch.zeros(4)), (
+        "hop bias never moved from its zero init, so it was not being optimised"
+    )
+    assert hist["config"]["hop_bias_buckets"] == 4
+
+
+def test_answer_as_target_grades_the_answer_row_that_is_otherwise_untouched():
+    """The default leaves the answer row unbiased; the option is what fills it in."""
+    tag, tok, ex = make_examples(4)
+    e = ex[0]
+    pos = e.answer_pos
+    values = torch.nn.Parameter(torch.tensor([0.5, -0.25, 0.75, -1.0]))
+
+    plain = collate([e], family="none", hop_bias=HopBias(values=values),
+                    device="cpu", bias_dtype=torch.float32)["attention_bias"][0, 0]
+    graded = collate([e], family="none",
+                     hop_bias=HopBias(values=values, answer_as_target=True),
+                     device="cpu", bias_dtype=torch.float32)["attention_bias"][0, 0]
+
+    live = e.graph.pad_from or plain.shape[0]
+    assert torch.allclose(plain[pos, :live], torch.zeros(live)), (
+        "answer row was expected to be unbiased by default"
+    )
+    assert not torch.allclose(graded[pos, :live], torch.zeros(live)), (
+        "answer_as_target did not reach the answer row"
+    )
+
+    # Node-to-node entries must be identical; only the answer's own row and column may change.
+    owner = e.graph.span_of_token()
+    node_tok = (owner >= 0).nonzero().flatten()
+    assert torch.allclose(plain[node_tok][:, node_tok], graded[node_tok][:, node_tok]), (
+        "answer_as_target perturbed node-to-node bias, so the arm is no longer comparable"
+    )
+
+
+def test_answer_as_target_reads_the_target_bucket_for_the_target_span():
+    """Concretely: the answer sees the target's tokens at the hop-0 value."""
+    tag, tok, ex = make_examples(4)
+    e = ex[0]
+    values = torch.nn.Parameter(torch.tensor([0.5, -0.25, 0.75, -1.0]))
+    bias = collate([e], family="none",
+                   hop_bias=HopBias(values=values, answer_as_target=True),
+                   device="cpu", bias_dtype=torch.float32)["attention_bias"][0, 0]
+
+    lo, hi = e.graph.spans[0]
+    assert torch.allclose(bias[e.answer_pos, lo:hi], torch.full((hi - lo,), 0.5))
+
+
+def test_answer_as_target_never_alters_a_hard_mask():
+    """The option touches the additive term only, so `star` and `ego` are untouched."""
+    tag, tok, ex = make_examples(4)
+    for family in ("star", "ego", "ego_star"):
+        a = collate(ex[:1], family=family, device="cpu",
+                    bias_dtype=torch.float32)["attention_bias"]
+        b = collate(ex[:1], family=family,
+                    hop_bias=HopBias(values=torch.zeros(4), answer_as_target=True),
+                    device="cpu", bias_dtype=torch.float32)["attention_bias"]
+        assert torch.equal(a, b), f"{family} changed under answer_as_target"
+
+
+def test_zero_initialised_hop_bias_starts_as_the_unmodified_model():
+    """The method's safety property: at init it is exactly the no-structure baseline."""
+    tag, tok, ex = make_examples(4)
+    hb = HopBias(values=torch.nn.Parameter(torch.zeros(4)))
+    with_bias = collate(ex[:1], family="none", hop_bias=hb, device="cpu",
+                        bias_dtype=torch.float32)["attention_bias"]
+    without = collate(ex[:1], family="none", device="cpu",
+                      bias_dtype=torch.float32)["attention_bias"]
+    assert torch.equal(with_bias.detach(), without)
 
 
 def test_history_records_config_and_provenance():

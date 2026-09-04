@@ -192,11 +192,22 @@ class HopBias:
     ``nn.Parameter``s the model *learns* how much topology should matter, and the degenerate
     solution (all zeros) is exactly the no-structure baseline -- so the method can always fall
     back to the thing that already works, which a hard mask cannot do.
+
+    ``answer_as_target`` extends the bias over the answer ``[M]`` position by treating it as part
+    of the target node's span. By default the answer position belongs to no node span -- the
+    instruction prefix and answer suffix are deliberately left globally visible -- so the graded
+    bias never writes to the one attention row that produces the prediction, and its effect on the
+    answer is purely indirect through the node representations. That is the same indirect route a
+    hard mask has, which is fine for a like-for-like comparison but gives up the thing a graded
+    bias can uniquely express: a *direct*, learnable "how much does a hop-k neighbour count when I
+    answer". Off by default so the headline arm stays comparable to the mask ladder; the ablation
+    is what tells us whether the direct route matters.
     """
 
     values: torch.Tensor  # (n_buckets,)
     scale: float = 1.0
     exact: bool = True
+    answer_as_target: bool = False
 
     def node_bias(self, g: LinearisedGraph) -> torch.Tensor:
         n_buckets = self.values.shape[0]
@@ -251,6 +262,7 @@ def node_to_token_bias(
     node_bias: torch.Tensor | None = None,
     *,
     unassigned_visible: bool = True,
+    answer_as_target: bool = False,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """Expand ``(n_nodes, n_nodes)`` node-level structure to ``(seq_len, seq_len)`` token bias.
@@ -282,8 +294,17 @@ def node_to_token_bias(
         bias = bias.masked_fill(~allow_tok, MASK_BIAS)
 
     if node_bias is not None:
-        add = node_bias.to(dtype)[idx[:, None], idx[None, :]]
-        pair_assigned = assigned[:, None] & assigned[None, :]
+        b_assigned, b_idx = assigned, idx
+        if answer_as_target and g.answer_pos is not None:
+            # Only the additive term sees this, never the gate. Rewriting the gate's ownership
+            # would silently change what `star` and `ego` mean and make the graded arm
+            # incomparable to the mask ladder it is supposed to be measured against.
+            b_assigned = assigned.clone()
+            b_assigned[g.answer_pos] = True
+            b_idx = idx.clone()
+            b_idx[g.answer_pos] = TARGET
+        add = node_bias.to(dtype)[b_idx[:, None], b_idx[None, :]]
+        pair_assigned = b_assigned[:, None] & b_assigned[None, :]
         bias = bias + torch.where(pair_assigned, add, torch.zeros((), dtype=dtype))
 
     if g.pad_from is not None and g.pad_from < S:
@@ -336,6 +357,7 @@ def build_attention_bias(
         out[b, 0] = node_to_token_bias(
             g, node_allow=allow, node_bias=nb, dtype=dtype,
             unassigned_visible=unassigned_visible,
+            answer_as_target=bool(hop_bias is not None and hop_bias.answer_as_target),
         )
 
     return out.to(device)

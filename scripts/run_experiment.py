@@ -53,6 +53,8 @@ def parse_args():
     p.add_argument("--max-neighbours", type=int, default=10)
     p.add_argument("--hop-bias-buckets", type=int, default=None,
                    help="enable a graded HopBias with this many buckets (Phase 1)")
+    p.add_argument("--hop-bias-answer-as-target", action="store_true",
+                   help="also grade the answer [M] token's reads, as if it were the target node")
     p.add_argument("--random-node-control", action="store_true",
                    help="E0.3: replace graph neighbours with random nodes")
     p.add_argument("--limit-train", type=int, default=None)
@@ -141,7 +143,8 @@ def main():
         seq_len=args.seq_len, epochs=args.epochs, lr=args.lr,
         effective_batch=args.effective_batch, k_hops=args.k_hops,
         max_neighbours_per_hop=args.max_neighbours,
-        hop_bias_buckets=args.hop_bias_buckets, device=args.device,
+        hop_bias_buckets=args.hop_bias_buckets,
+        hop_bias_answer_as_target=args.hop_bias_answer_as_target, device=args.device,
         eval_every_epochs=args.eval_every_epochs, max_eval_examples=args.limit_eval,
         provenance={
             "split": SPLIT_PROVENANCE,
