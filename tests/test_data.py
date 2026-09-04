@@ -14,11 +14,23 @@ import pytest
 import torch
 
 from plexus.data.sampling import sample_ego_graph, sample_lp_examples
-from plexus.data.tags import TAG, load_cora
+from plexus.data.tags import (
+    PUBMED_CLASSES,
+    TAG,
+    load_cora,
+    load_pubmed,
+    load_tag,
+    pubmed_label_keyword_agreement,
+    pubmed_label_mapping_is_consistent,
+)
 
 CORA_ROOT = os.environ.get("PLEXUS_DATA_ROOT", "/tmp/adelechinda/plexus_data")
 _has_cora = (Path(CORA_ROOT) / "cora_orig" / "cora.content").exists()
 needs_cora = pytest.mark.skipif(not _has_cora, reason=f"Cora not found under {CORA_ROOT}")
+
+PUBMED_ROOT = CORA_ROOT
+_has_pubmed = (Path(PUBMED_ROOT) / "PubMed_orig" / "pubmed.json").exists()
+needs_pubmed = pytest.mark.skipif(not _has_pubmed, reason=f"PubMed not found under {PUBMED_ROOT}")
 
 
 def toy_tag() -> TAG:
@@ -182,3 +194,59 @@ def test_cora_split_depends_on_seed():
     b = load_cora(CORA_ROOT, seed=1, cache=False)
     assert not torch.equal(a.train_idx, b.train_idx)
     assert len(a.train_idx) == len(b.train_idx)
+
+
+# ---------------------------------------------------------------------------- real PubMed
+
+@needs_pubmed
+def test_pubmed_matches_canonical_statistics():
+    tag = load_pubmed(PUBMED_ROOT, seed=0, cache=False)
+    assert tag.num_nodes == 19717
+    assert tag.num_classes == 3
+    # The LINQS README states 44338 citation links; symmetrising after dropping self-loops and
+    # duplicate pairs leaves slightly fewer, and the gap is the duplicates, not missing data.
+    assert 44000 <= tag.num_edges <= 44338
+    assert len(tag.train_idx) == 11830
+    allidx = torch.cat([tag.train_idx, tag.val_idx, tag.test_idx]).sort().values
+    assert torch.equal(allidx, torch.arange(19717))
+    # Undirected means both directions present for every edge.
+    src, dst = tag.edge_index.tolist()
+    assert set(zip(src, dst, strict=True)) == set(zip(dst, src, strict=True))
+
+
+@needs_pubmed
+def test_pubmed_text_is_keyed_by_pmid_not_by_position():
+    """A positional join would silently pair each node with a neighbouring paper's abstract."""
+    tag = load_pubmed(PUBMED_ROOT, seed=0, cache=False)
+    assert tag.text_coverage["file_found"] > 0.999
+    assert tag.text_coverage["both"] > 0.999
+    assert all(t.startswith(("Title:", "Abstract:")) for t in tag.text if t)
+
+
+@needs_pubmed
+def test_pubmed_label_indices_mean_what_the_class_names_say():
+    """Guards against a permuted label mapping, which raises no exception and ruins every number.
+
+    Read the agreement matrix down its columns: animal-model vocabulary is common to the whole
+    corpus, so it is the most frequent probe within every class. The identifying signal is which
+    class each probe set is most *enriched* in.
+    """
+    tag = load_pubmed(PUBMED_ROOT, seed=0, cache=False)
+    m = pubmed_label_keyword_agreement(tag.text, tag.labels)
+    assert len(m) == len(PUBMED_CLASSES)
+    for c in range(len(PUBMED_CLASSES)):
+        best = max(range(len(m)), key=lambda i: m[i][c])
+        assert best == c, f"probe {c} is most enriched in class {best}, not {c}: {m}"
+    assert pubmed_label_mapping_is_consistent(tag.text, tag.labels)
+
+
+@needs_pubmed
+def test_pubmed_split_depends_on_seed_and_is_registered():
+    a = load_pubmed(PUBMED_ROOT, seed=0, cache=False)
+    b = load_pubmed(PUBMED_ROOT, seed=1, cache=False)
+    assert not torch.equal(a.train_idx, b.train_idx)
+    assert len(a.train_idx) == len(b.train_idx)
+    # The harness reaches datasets only through load_tag, so registration is what makes
+    # --dataset pubmed work at all.
+    assert load_tag("pubmed", PUBMED_ROOT, seed=0).num_nodes == 19717
+    assert "Pubmed-Diabetes" in a.split_provenance or "Pubmed" in a.split_provenance

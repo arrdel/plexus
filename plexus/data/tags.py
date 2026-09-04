@@ -19,6 +19,7 @@ from the assumption it rests on.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,27 @@ SPLIT_PROVENANCE = (
     "ASSUMED to match TAG-DLM, which cites LLaGA's preprocessing but publishes no code and no "
     "split file. Not verified against the paper."
 )
+
+PUBMED_SPLIT_PROVENANCE = (
+    "TAPE/LINQS Pubmed-Diabetes (title+abstract), random 60/20/20 split by seed. "
+    "ASSUMED to match TAG-DLM on the same grounds as Cora: it cites LLaGA's preprocessing but "
+    "publishes no code and no split file. Not verified against the paper."
+)
+
+# The three LINQS labels, in the order the Pubmed-Diabetes README lists them, which is the order
+# `label=1,2,3` in the NODE file indexes. The mapping is asserted, not assumed: see
+# `pubmed_label_keyword_agreement`, which checks it against the abstracts.
+PUBMED_CLASSES = [
+    "Diabetes_Mellitus_Experimental",
+    "Diabetes_Mellitus_Type_1",
+    "Diabetes_Mellitus_Type_2",
+]
+
+PUBMED_CLASS_PROMPT_NAMES = [
+    "experimentally induced diabetes",
+    "type 1 diabetes",
+    "type 2 diabetes",
+]
 
 # TAPE's class ordering, kept verbatim so our label indices match theirs.
 CORA_CLASSES = [
@@ -256,7 +278,176 @@ def load_cora(root: str | Path, seed: int = 0, cache: bool = True) -> TAG:
     return tag
 
 
-_LOADERS = {"cora": load_cora}
+def _parse_pubmed_graph(pubmed_dir: Path) -> tuple[np.ndarray, np.ndarray, torch.Tensor]:
+    """Parse the LINQS NODE and DIRECTED files into (pmids, labels, undirected edge_index).
+
+    The NODE file's first two lines are a banner and a schema; data rows begin at line 3 and start
+    with the PMID followed by `label=k` for k in 1..3. The cites file references papers by PMID
+    and, unlike Cora's, every endpoint we have seen is present in the node file -- but we drop
+    unknown endpoints anyway rather than trust that, and report how many were dropped.
+    """
+    nodes = pubmed_dir / "data" / "Pubmed-Diabetes.NODE.paper.tab"
+    cites = pubmed_dir / "data" / "Pubmed-Diabetes.DIRECTED.cites.tab"
+    if not nodes.exists() or not cites.exists():
+        raise FileNotFoundError(
+            f"expected {nodes} and {cites}. Fetch the TAPE PubMed archive first:\n"
+            f"  gdown 1sYZX-jP6H8OkopVa9cp8-KXdEti5ki_W -O PubMed.zip && unzip PubMed.zip"
+        )
+
+    pmids: list[str] = []
+    labels: list[int] = []
+    with open(nodes, encoding="utf-8", errors="replace") as f:
+        for lineno, line in enumerate(f):
+            if lineno < 2 or not line.strip():
+                continue
+            fields = line.split("\t")
+            label_field = next((x for x in fields if x.startswith("label=")), None)
+            if label_field is None:
+                raise ValueError(f"{nodes}:{lineno + 1} has no label= field")
+            k = int(label_field.split("=", 1)[1])
+            if not 1 <= k <= len(PUBMED_CLASSES):
+                raise ValueError(f"{nodes}:{lineno + 1} has label {k}, expected 1..3")
+            pmids.append(fields[0])
+            labels.append(k - 1)
+
+    id_to_local = {pid: i for i, pid in enumerate(pmids)}
+    pairs, dropped = [], 0
+    with open(cites, encoding="utf-8", errors="replace") as f:
+        for lineno, line in enumerate(f):
+            if lineno < 2 or not line.strip():
+                continue
+            refs = [x.split("paper:", 1)[1] for x in line.split() if x.startswith("paper:")]
+            if len(refs) != 2:
+                continue
+            a, b = refs
+            if a in id_to_local and b in id_to_local:
+                pairs.append((id_to_local[a], id_to_local[b]))
+            else:
+                dropped += 1
+    if dropped:
+        print(f"  pubmed: dropped {dropped} citations with an endpoint outside the node file")
+
+    both = {(u, v) for u, v in pairs if u != v} | {(v, u) for u, v in pairs if u != v}
+    edge_index = torch.tensor(sorted(both), dtype=torch.long).t().contiguous()
+    return np.array(pmids), np.array(labels, dtype=np.int64), edge_index
+
+
+def _parse_pubmed_text(pubmed_dir: Path, pmids: np.ndarray) -> tuple[list[str], dict[str, float]]:
+    """Read title (`TI`) and abstract (`AB`) per node from `pubmed.json`, keyed by PMID.
+
+    TAPE reads this file positionally, which is correct only while its order matches the NODE
+    file's. We key by PMID instead and report coverage, for the same reason the Cora loader does:
+    a prompt built from the wrong paper's abstract is invisible in an accuracy number.
+    """
+    blob = pubmed_dir / "pubmed.json"
+    if not blob.exists():
+        raise FileNotFoundError(f"expected {blob}")
+
+    records = json.loads(blob.read_text(encoding="utf-8", errors="replace"))
+    by_pmid = {str(r.get("PMID")): r for r in records}
+
+    texts: list[str] = []
+    n_title = n_abstract = n_both = n_found = 0
+    for pid in pmids:
+        rec = by_pmid.get(str(pid))
+        title = (rec or {}).get("TI", "").strip()
+        abstract = (rec or {}).get("AB", "").strip()
+        n_found += rec is not None
+        n_title += bool(title)
+        n_abstract += bool(abstract)
+        n_both += bool(title and abstract)
+        parts = []
+        if title:
+            parts.append(f"Title: {title}")
+        if abstract:
+            parts.append(f"Abstract: {abstract}")
+        texts.append("\n".join(parts))
+
+    n = len(pmids)
+    coverage = {
+        "file_found": n_found / n,
+        "title": n_title / n,
+        "abstract": n_abstract / n,
+        "both": n_both / n,
+        "empty": sum(1 for t in texts if not t) / n,
+    }
+    return texts, coverage
+
+
+# Terms that should be over-represented in each class if the label index means what we think it
+# does. Deliberately blunt: the point is to catch a permuted mapping, not to classify.
+_PUBMED_LABEL_PROBES = (
+    ("rat", "rats", "mice", "mouse", "streptozotocin", "animal"),
+    ("iddm", "insulin-dependent", "juvenile"),
+    ("niddm", "non-insulin-dependent", "noninsulin-dependent"),
+)
+
+
+def pubmed_label_keyword_agreement(texts: list[str], labels: torch.Tensor) -> list[list[float]]:
+    """Rate at which each class's texts hit each probe set, as a 3x3 matrix, row `i` = class `i`.
+
+    A permuted label mapping is the kind of error that costs a paper its numbers and raises no
+    exception, so we check ours instead of asserting it. Read the result **down the columns**, not
+    across the rows: animal-model vocabulary is common to the whole diabetes literature, so
+    probe 0 is the most frequent probe in every class and every row peaks on it. What identifies
+    the mapping is which class is most enriched for a given probe, i.e. `argmax` of each column,
+    and a correct mapping puts that on the diagonal.
+    """
+    lowered = [t.lower() for t in texts]
+    out = []
+    for i in range(len(PUBMED_CLASSES)):
+        idx = [j for j, y in enumerate(labels.tolist()) if y == i]
+        row = [
+            sum(any(p in lowered[j] for p in probes) for j in idx) / max(len(idx), 1)
+            for probes in _PUBMED_LABEL_PROBES
+        ]
+        out.append(row)
+    return out
+
+
+def pubmed_label_mapping_is_consistent(texts: list[str], labels: torch.Tensor) -> bool:
+    """True when each probe set is most enriched in the class it was written for."""
+    m = pubmed_label_keyword_agreement(texts, labels)
+    return all(max(range(len(m)), key=lambda i: m[i][c]) == c for c in range(len(m[0])))
+
+
+def load_pubmed(root: str | Path, seed: int = 0, cache: bool = True) -> TAG:
+    """Load PubMed (Pubmed-Diabetes) with raw title/abstract text.
+
+    `root` is the directory *containing* `PubMed_orig/`. 19717 nodes against Cora's 2708, so this
+    is the dataset that tells us whether a conclusion drawn on Cora survives a 7x larger graph.
+    """
+    root = Path(root)
+    cache_path = root / f"pubmed_tag_seed{seed}.pt"
+    if cache and cache_path.exists():
+        blob = torch.load(cache_path, weights_only=False)
+        return TAG(**blob)
+
+    pubmed_dir = root / "PubMed_orig"
+    pmids, labels, edge_index = _parse_pubmed_graph(pubmed_dir)
+    texts, coverage = _parse_pubmed_text(pubmed_dir, pmids)
+    train_idx, val_idx, test_idx = _split_60_20_20(len(pmids), seed)
+
+    tag = TAG(
+        name="pubmed",
+        text=texts,
+        labels=torch.tensor(labels, dtype=torch.long),
+        edge_index=edge_index,
+        class_names=list(PUBMED_CLASSES),
+        class_prompt_names=list(PUBMED_CLASS_PROMPT_NAMES),
+        train_idx=train_idx,
+        val_idx=val_idx,
+        test_idx=test_idx,
+        split_seed=seed,
+        split_provenance=PUBMED_SPLIT_PROVENANCE,
+        text_coverage=coverage,
+    )
+    if cache:
+        torch.save(tag.__dict__, cache_path)
+    return tag
+
+
+_LOADERS = {"cora": load_cora, "pubmed": load_pubmed}
 
 
 def load_tag(name: str, root: str | Path, seed: int = 0, **kw) -> TAG:
