@@ -601,3 +601,58 @@ E0.0d, and the graded bias (C3's method) is trainable as implemented.
 - The `star`-denser-than-`ego` finding should be reported in the paper as a measured third
   confound, not as a footnote. It is now Appendix Table 3 and is cited from §3.
 - 78 tests pass on ai-lab2 against the real LLaDA remote code (up from 71).
+
+---
+
+## E0.0j — Throughput measured; dynamic padding is worth 2.25× wall clock (2026-09-03, 23:47–23:56)
+
+**Question.** What does a training step actually cost, and was the dynamic-padding decision of
+E0.0h worth implementing?
+
+**Method.** `scripts/benchmark_step.py`, steady-state fwd+bwd, warmup discarded, median over the
+remainder, at the true padded length distribution. Two runs differing in exactly one setting:
+pad-to-128 versus fixed `S = 2048`. One RTX 4090, other card idle. MFU against a separately
+measured 149.5 TFLOP/s bf16 matmul peak, not a vendor figure.
+
+| | pad to 128 | fixed S=2048 |
+| --- | --- | --- |
+| median step | 734 ms | 1825 ms |
+| median padded length | 1050 | 2048 |
+| throughput | 1294 tok/s | 1122 tok/s |
+| effective | 62.3 TFLOP/s | 54.0 TFLOP/s |
+| MFU | 41.6 % | 36.1 % |
+| peak memory | 20.38 GB | 21.17 GB |
+| Cora NC, 20 epochs | **7.32 h** | 16.47 h |
+
+**Findings.**
+
+1. **Dynamic padding is worth 2.25× in wall clock**, against only 1.15× in throughput. The gap is
+   the point: shortening sequences removes tokens *and* makes each cheaper, and the removed tokens
+   were the quadratically expensive ones. Cora's p95 is 1384 against a 2048 budget, so roughly a
+   third of every fixed-length batch was padding being attended over.
+2. **MFU *rises* as sequences shorten** (36.1 → 41.6 %), which is backwards from the usual
+   direction. The explanation is the bias tensor: `(B,1,S,S)` bf16 is 8.4 MB/sample at S=2048 and
+   2.1 MB at S=1024. It is pure memory traffic with no arithmetic attached, so it taxes
+   utilisation directly, and halving S quarters it. Both TAG-DLM's formulation and ours pay this;
+   neither avoids it while structure enters as a dense additive term.
+3. **20.38 GB peak**, above the smoke run's 18.96 GB (longer batches). 20.38 is the number to
+   schedule against, and is why the queue waits for 21 GB free.
+4. The earlier ~16 % MFU figure was an artefact of `output_hidden_states` retaining all 33 layers
+   with a competing job on the second card. Neither it nor the smoke run's wall clock is usable.
+   Both are recorded in the paper's Appendix D.3 as failure modes rather than deleted.
+
+**Consequence.**
+
+- At 7.32 h/arm the 9-arm × 3-seed grid is ~200 GPU-h, ~4 days on two cards. Affordable against
+  the 2026-12-03 experiment deadline, so the seed sweep is no longer the thing to cut.
+- **The queue is now multi-worker.** One worker per card, claiming jobs by `mkdir` of a lock
+  directory (atomic; a `-e` test then `touch` is not). Verified: two workers took distinct jobs on
+  the same instant and both skipped a pre-claimed one. Queue extended to 22 jobs — seeds 1 and 2
+  for every arm, ordered so seed 1 of a decisive arm precedes seed 2 of anything, so a cut leaves
+  two seeds on the arms the claims rest on.
+- **E0.1 — the reproduction gate — is running for real** as of 23:52 (253 optimiser steps, loss
+  0.1051 at step 1, 1247 tok/s, 19.47 GB). This is the first run in the project's history to
+  complete an optimiser step outside a unit test.
+- Editing a bash script while bash is executing it will corrupt the running process, because bash
+  reads the file lazily by byte offset. The in-flight E0.1 was preserved by pre-claiming its lock,
+  killing only the parent shell, and letting the orphaned python child continue.

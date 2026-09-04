@@ -182,6 +182,58 @@ def table_density(measured: dict | None) -> str:
     return "\n".join(rows)
 
 
+# Cora node-classification training examples, i.e. one epoch. Measured by
+# scripts/profile_sequence_lengths.py, not the 2708 nodes of the whole graph.
+CORA_NC_TRAIN = 1624
+
+THROUGHPUT_ROWS = [
+    ("median step (ms)", "median_step_s", lambda v: f"{1000 * v:.0f}"),
+    ("median padded length", "padded_len_mean", lambda v: f"{v:.0f}"),
+    ("throughput (tok/s)", "tokens_per_s", lambda v: f"{v:.0f}"),
+    ("effective (TFLOP/s)", "tflops", lambda v: f"{v:.1f}"),
+    ("MFU (\\%)", "mfu_percent", lambda v: f"{v:.1f}"),
+    ("peak memory (GB)", "peak_gb", lambda v: f"{v:.2f}"),
+]
+
+
+def table_throughput(exp_dir: Path) -> tuple[str, str]:
+    """The two benchmark columns, and the speedup macro comparing them.
+
+    The paired benchmark is the whole point: a throughput number alone says nothing about whether
+    dynamic padding was worth implementing, and the two runs differ in exactly one setting.
+    """
+    cols = []
+    for name in ("bench_star.json", "bench_fixed2048.json"):
+        f = exp_dir / name
+        cols.append(json.loads(f.read_text()) if f.exists() else None)
+
+    rows = []
+    for label, key, fmt in THROUGHPUT_ROWS:
+        cells = [fmt(c[key]) if c and c.get(key) is not None else r"\pending" for c in cols]
+        rows.append(f"  {label} & {cells[0]} & {cells[1]} \\\\")
+
+    if all(c and c.get("tokens_per_s") for c in cols):
+        speedup = cols[0]["tokens_per_s"] / cols[1]["tokens_per_s"]
+        # Wall clock is the quantity a reader plans a GPU booking against, and it moves by more
+        # than throughput does because the shorter sequences also carry fewer tokens per epoch.
+        hours = [
+            20 * CORA_NC_TRAIN * c["padded_len_mean"] / c["tokens_per_s"] / 3600 for c in cols
+        ]
+        rows.append(r"  \midrule")
+        rows.append(f"  Cora NC, $20$ epochs (h) & {hours[0]:.2f} & {hours[1]:.2f} \\\\")
+        macro = (f"\\newcommand{{\\padspeedup}}{{{speedup:.2f}}}\n"
+                 f"\\newcommand{{\\padwallclockspeedup}}{{{hours[1] / hours[0]:.2f}}}\n"
+                 f"\\newcommand{{\\benchmfu}}{{{cols[0]['mfu_percent']:.1f}}}\n"
+                 f"\\newcommand{{\\benchtoks}}{{{cols[0]['tokens_per_s']:.0f}}}\n"
+                 f"\\newcommand{{\\benchhours}}{{{hours[0]:.1f}}}")
+    else:
+        macro = "\n".join(
+            f"\\newcommand{{\\{n}}}{{\\pending}}"
+            for n in ("padspeedup", "padwallclockspeedup", "benchmfu", "benchtoks", "benchhours")
+        )
+    return "\n".join(rows), macro
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--experiments", default="experiments")
@@ -197,7 +249,9 @@ def main():
     else:
         print(f"no {dpath}; density column will be PENDING")
 
-    runs = load_runs(Path(args.experiments))
+    exp_dir = Path(args.experiments)
+    thr_body, thr_macros = table_throughput(exp_dir)
+    runs = load_runs(exp_dir)
     real = [r for r in runs if not r["_smoke"]]
     print(f"{len(runs)} run directories, {len(real)} non-smoke")
     for r in runs:
@@ -227,6 +281,12 @@ def main():
         "",
         r"\newcommand{\densityn}{"
         + (str(measured.get("limit")) if measured else "0") + "}",
+        "",
+        r"\newcommand{\throughputbody}{%",
+        thr_body,
+        "}",
+        "",
+        thr_macros,
         "",
     ]
     out = Path(args.out)

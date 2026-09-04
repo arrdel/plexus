@@ -1,0 +1,135 @@
+{
+  "median_step_s": 1.8246798780746758,
+  "tokens_per_s": 1121.8382335414872,
+  "tflops": 53.98285579801636,
+  "mfu_percent": 36.1089336441581,
+  "peak_gb": 21.1692032,
+  "n_steady": 16,
+  "warmup": 4,
+  "mask_family": "star",
+  "pad_to_multiple_of": 128,
+  "fixed_seq_len": 2048,
+  "padded_len_mean": 2048.0,
+  "records": [
+    {
+      "step": 0,
+      "seconds": 1.9684202959761024,
+      "tokens": 2048,
+      "warmup": true
+    },
+    {
+      "step": 1,
+      "seconds": 1.825271513313055,
+      "tokens": 2048,
+      "warmup": true
+    },
+    {
+      "step": 2,
+      "seconds": 1.8107820143923163,
+      "tokens": 2048,
+      "warmup": true
+    },
+    {
+      "step": 3,
+      "seconds": 1.826430826447904,
+      "tokens": 2048,
+      "warmup": true
+    },
+    {
+      "step": 4,
+      "seconds": 1.824722376652062,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 5,
+      "seconds": 1.83255903609097,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 6,
+      "seconds": 1.8190704816952348,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 7,
+      "seconds": 1.8189517678692937,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 8,
+      "seconds": 1.8246373794972897,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 9,
+      "seconds": 1.8432927234098315,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 10,
+      "seconds": 1.8288775086402893,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 11,
+      "seconds": 1.821763627231121,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 12,
+      "seconds": 1.8091873973608017,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 13,
+      "seconds": 1.8351120203733444,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 14,
+      "seconds": 1.820762064307928,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 15,
+      "seconds": 1.8317549219354987,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 16,
+      "seconds": 1.824105978012085,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 17,
+      "seconds": 1.819458038546145,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 18,
+      "seconds": 1.825497423298657,
+      "tokens": 2048,
+      "warmup": false
+    },
+    {
+      "step": 19,
+      "seconds": 1.8294496340677142,
+      "tokens": 2048,
+      "warmup": false
+    }
+  ]
+}
