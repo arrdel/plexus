@@ -1,0 +1,9 @@
+{
+  "accuracy": 0.71,
+  "n": 300,
+  "mask_family": "star",
+  "mask_density": 0.42738205194473267,
+  "task": "nc",
+  "seed": 1,
+  "extra": {}
+}

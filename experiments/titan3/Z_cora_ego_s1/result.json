@@ -1,0 +1,9 @@
+{
+  "accuracy": 0.7433333333333333,
+  "n": 300,
+  "mask_family": "ego",
+  "mask_density": 0.4047774374485016,
+  "task": "nc",
+  "seed": 1,
+  "extra": {}
+}

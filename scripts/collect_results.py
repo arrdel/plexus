@@ -74,6 +74,9 @@ def load_runs(exp_dir: Path) -> list[dict]:
         prov = cfg.get("provenance", {}) or {}
         r["_gpu"] = prov.get("gpu")
         r["_host"] = prov.get("host")
+        # A frozen-backbone run is not a weaker version of a trained one, it answers a different
+        # question, so it must never be averaged into a trained arm's cell.
+        r["_no_lora"] = bool(prov.get("no_lora", False))
         runs.append(r)
     return runs
 
@@ -149,10 +152,13 @@ def density_cell(runs: list[dict], measured: dict | None = None, task: str = "nc
     return r"\pending"
 
 
-def select(runs, *, task, family, dataset="cora", hop_buckets=None, answer_as_target=False):
+def select(runs, *, task, family, dataset="cora", hop_buckets=None, answer_as_target=False,
+           no_lora=False):
     out = []
     for r in runs:
         if r["_smoke"] or r.get("task") != task or r["_dataset"] != dataset:
+            continue
+        if bool(r["_no_lora"]) != bool(no_lora):
             continue
         if r.get("mask_family") != family:
             continue
@@ -271,6 +277,40 @@ def table_throughput(exp_dir: Path) -> tuple[str, str]:
     return "\n".join(rows), macro
 
 
+def table_zeroshot(runs: list[dict], measured: dict | None) -> str:
+    """The frozen backbone under each mask, on both datasets.
+
+    This is the arm the baseline never reports: no LoRA, no optimiser step, one mask varied. It
+    bounds how much of any reported number needs explaining at all.
+    """
+    rows = []
+    for fam in ORDER:
+        cells = []
+        for ds in ("cora", "pubmed"):
+            sel = select(runs, task="nc", family=fam, dataset=ds, no_lora=True)
+            cells.append(cell(agg(sel)))
+        rho = density_cell([], measured, "nc", fam)
+        rows.append(f"  {FAMILY_TEX[fam]} & {rho} & {cells[0]} & {cells[1]} \\\\")
+    return "\n".join(rows)
+
+
+def zeroshot_macros(runs: list[dict]) -> list[str]:
+    """Headline zero-shot figures, and the seed spread that bounds what they can support."""
+    out = []
+    for ds in ("cora", "pubmed"):
+        sel = select(runs, task="nc", family="none", dataset=ds, no_lora=True)
+        a = agg(sel)
+        name = "Cora" if ds == "cora" else "PubMed"
+        out.append(rf"\newcommand{{\zsnone{name}}}{{"
+                   + (f"{a[0]:.2f}" if a else r"\pending") + "}")
+        # Range over seeds of the no-structure arm. If this exceeds the gaps between mask
+        # families, single-seed comparisons between families cannot be read at all.
+        accs = sorted(100 * r["accuracy"] for r in sel)
+        out.append(rf"\newcommand{{\zsseedspread{name}}}{{"
+                   + (f"{accs[-1] - accs[0]:.2f}" if len(accs) > 1 else r"\pending") + "}")
+    return out
+
+
 def noise_floor_macros(runs: list[dict]) -> list[str]:
     """The largest same-seed disagreement anywhere in the grid, and the table behind it."""
     rows, worst = [], 0.0
@@ -341,6 +381,12 @@ def main():
         "",
         r"\newcommand{\densityn}{"
         + (str(measured.get("limit")) if measured else "0") + "}",
+        "",
+        r"\newcommand{\zeroshotbody}{%",
+        table_zeroshot(runs, measured),
+        "}",
+        "",
+        *zeroshot_macros(runs),
         "",
         *noise_floor_macros(real),
         "",

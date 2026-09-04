@@ -1,0 +1,9 @@
+{
+  "accuracy": 0.66,
+  "n": 300,
+  "mask_family": "random_rewire",
+  "mask_density": 0.600543737411499,
+  "task": "nc",
+  "seed": 0,
+  "extra": {}
+}

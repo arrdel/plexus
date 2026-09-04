@@ -798,3 +798,68 @@ hours earlier. In flight: titan3 0–3 on `star`/`none`/`ego`/`ego_star`, ai-lab
   on 1624 examples with a 167.8 M-parameter adapter memorises the training set completely. The
   `--eval-every-epochs 4` curve exists precisely to show where test accuracy peaked, and the epoch
   budget should be re-set from it rather than from the plan's guess.
+
+---
+
+## E0.0m — The zero-shot ladder, and a hypothesis of mine that it refuted (2026-09-04, 08:55–10:00)
+
+**Origin.** The step-1 training loss of a run is the loss of the **frozen** model under that mask,
+because a LoRA at initialisation has no effect. Reading it off the in-flight logs cost nothing:
+
+|  | none | star | ego | ego_star |
+| --- | --- | --- | --- | --- |
+| Cora | 0.3325 | **0.1160** | 0.1793 | 0.1357 |
+| PubMed | 1.2277 | **0.3538** | 0.7905 | 0.4415 |
+
+`star` cuts the pretrained model's loss by 65% on Cora and 71% on PubMed with no learning, the
+ordering `none > ego > ego_star > star` holds on both datasets, and `ego_star` sits most of the way
+from `ego` to `star`. I inferred that much of the gain the baseline attributes to topology needs no
+training, and that target reach explains the ego collapse. Both would have been strong claims.
+
+**The measurement refuted it.** `--no-lora` evaluates the frozen backbone with no optimiser step,
+at ~3.5 min/arm. Cora NC, n=300:
+
+| family | seed 0 | seed 1 | mean |
+| --- | --- | --- | --- |
+| none | 68.00 | 76.00 | **72.00 ± 5.66** |
+| star | 66.33 | 71.00 | 68.67 ± 3.30 |
+| ego | 65.67 | 74.33 | 70.00 ± 6.13 |
+| ego_star | 65.67 | 73.00 | 69.33 ± 5.19 |
+| random_rewire | 66.00 | — | 66.00 |
+
+PubMed NC, n=300, seed 0: none **89.67**, star 89.67, ego 87.67, ego_star 90.33, rewire 89.67.
+
+**The ordering is inverted.** `none` has the *highest* loss and the *highest* accuracy. A mask can
+lower cross-entropy at the answer position — restricting context makes the model more confident —
+without moving the `argmax` over the class names, and the loss sees only the confidence.
+**Loss under a mask is not evidence about accuracy under that mask.** I had already written the
+inference into the queue file's rationale before running it; the file now records the refutation
+instead, because a plausible unrun inference is exactly the kind of thing that ends up in a paper.
+
+**Three findings that do survive, all of them useful.**
+
+1. **No mask beats full attention before training.** So whatever a binary topology mask contributes
+   in the baseline is contributed *during optimisation*; it is not that the frozen model reads a
+   masked context better. This closes off an alternative explanation for the trained ladder before
+   the trained ladder has even landed.
+2. **PubMed NC is close to saturated by text alone: 89.67 with no graph whatsoever**, against
+   TAG-DLM's reported 96.30. At most ~6 points are available for *any* structural mechanism to
+   explain, and the no-structure arm that would establish this is not reported there. Confirms the
+   E0.0k caution at n=300 rather than n=24. **A benchmark with six points of headroom cannot
+   discriminate between ways of encoding structure.**
+3. **The seed effect exceeds the effect under study.** The no-structure arm alone moves **8.00
+   points** across two seeds on Cora, against a largest between-family gap of ~3, under one
+   protocol. Single-seed comparisons between families on Cora are uninterpretable. The plan's
+   three-seed rule is arithmetic, not caution.
+
+**Cost.** ~3.5 min/arm, run on GPU 7 *alongside* a training job — forward-only eval peaks ~17 GB,
+and 20.9 + 17 fits in the A6000's 49 GB. The whole seed-0 block cost under 40 minutes of shared
+time. **This should have been the first experiment in the project, not the fifteenth.** It needs no
+training, it bounds what every other number can possibly mean, and its absence from the baseline is
+the single clearest gap in it.
+
+**In the paper.** New §6.1 with \cref{tab:zeroshot}, generated from artefacts like every other
+table. Main body is 9 pages again after tightening; appendix 12.
+
+**Also now running:** all 8 titan3 cards plus 2 on ai-lab2 — Cora ladder ×4 (GPU 0–3), PubMed
+ladder ×4 (GPU 4–7), graded-bias ×2 (ai-lab2), zero-shot sweep sharing GPU 7.

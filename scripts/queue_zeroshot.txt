@@ -1,0 +1,79 @@
+# Zero-shot mask ladder: the frozen backbone, no LoRA, no optimiser step, one mask varied.
+#
+#   ONLY_GPU=7 MIN_FREE_MIB=18000 ./scripts/run_queue.sh scripts/queue_zeroshot.txt &
+#
+# Why this exists, and why it is cheap enough to be embarrassing that it was not run first:
+#
+# The step-1 training loss of every arm already in flight is the loss of the *frozen* model under
+# that mask, because a LoRA at initialisation has no effect. Those numbers came out as
+#
+#            none     star      ego   ego_star
+#   Cora    0.3325   0.1160   0.1793   0.1357
+#   PubMed  1.2277   0.3538   0.7905   0.4415
+#
+# so the star mask cuts the pretrained model's loss by 65% on Cora and 71% on PubMed *before any
+# learning happens*. The hypothesis was that this carries over to accuracy, which would make a
+# large part of the baseline's attributed gain require no training at all.
+#
+# IT DOES NOT. This queue refuted its own motivation, which is the reason it was worth running.
+# Zero-shot Cora NC accuracy at n=300 came out
+#
+#            none     star      ego
+#           68.00    66.33    65.67
+#
+# i.e. exactly inverted: `none` has the highest loss and the highest accuracy, and the masks are
+# very slightly *worse* than full attention. A mask can lower the cross-entropy on the answer
+# token -- restricting context makes the model more confident -- without moving the argmax over
+# the class names, and confidence is what the loss sees. **Loss under a mask is not evidence about
+# accuracy under that mask**, and the step-1 losses should not have been read as if it were.
+#
+# What survives is still worth reporting: before training, the mask families differ by about two
+# points and full attention wins. So whatever the star mask contributes in the baseline, it is
+# contributed during *training*, not by the frozen model, and the ladder's post-training
+# differences cannot be explained by the frozen model finding some masks easier.
+#
+# Each arm is one forward pass per example, so an arm costs minutes rather than hours. Seed 0
+# first for all four families on both datasets: that is the decisive block, and it finishes in
+# well under an hour.
+#
+# random_rewire is included because a density-matched control that carries no topology is exactly
+# what distinguishes "structure helps" from "a denser readable context helps".
+#
+# HopBias is deliberately absent: at its zero initialisation it is provably the unmodified model,
+# so its zero-shot arm *is* the `none` arm. Running it would only confirm the arithmetic.
+
+zs_cora_none_s0    scripts/run_experiment.py --task nc --dataset cora --mask-family none          --seed 0 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_none_s0
+zs_cora_star_s0    scripts/run_experiment.py --task nc --dataset cora --mask-family star          --seed 0 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_star_s0
+zs_cora_ego_s0     scripts/run_experiment.py --task nc --dataset cora --mask-family ego           --seed 0 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_ego_s0
+zs_cora_egostar_s0 scripts/run_experiment.py --task nc --dataset cora --mask-family ego_star      --seed 0 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_ego_star_s0
+zs_cora_rewire_s0  scripts/run_experiment.py --task nc --dataset cora --mask-family random_rewire --seed 0 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_rewire_s0
+
+zs_pm_none_s0      scripts/run_experiment.py --task nc --dataset pubmed --mask-family none          --seed 0 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_none_s0
+zs_pm_star_s0      scripts/run_experiment.py --task nc --dataset pubmed --mask-family star          --seed 0 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_star_s0
+zs_pm_ego_s0       scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego           --seed 0 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_ego_s0
+zs_pm_egostar_s0   scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego_star      --seed 0 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_ego_star_s0
+zs_pm_rewire_s0    scripts/run_experiment.py --task nc --dataset pubmed --mask-family random_rewire --seed 0 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_rewire_s0
+
+zs_cora_none_s1    scripts/run_experiment.py --task nc --dataset cora --mask-family none          --seed 1 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_none_s1
+zs_cora_star_s1    scripts/run_experiment.py --task nc --dataset cora --mask-family star          --seed 1 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_star_s1
+zs_cora_ego_s1     scripts/run_experiment.py --task nc --dataset cora --mask-family ego           --seed 1 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_ego_s1
+zs_cora_egostar_s1 scripts/run_experiment.py --task nc --dataset cora --mask-family ego_star      --seed 1 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_ego_star_s1
+zs_cora_rewire_s1  scripts/run_experiment.py --task nc --dataset cora --mask-family random_rewire --seed 1 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_rewire_s1
+
+zs_pm_none_s1      scripts/run_experiment.py --task nc --dataset pubmed --mask-family none          --seed 1 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_none_s1
+zs_pm_star_s1      scripts/run_experiment.py --task nc --dataset pubmed --mask-family star          --seed 1 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_star_s1
+zs_pm_ego_s1       scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego           --seed 1 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_ego_s1
+zs_pm_egostar_s1   scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego_star      --seed 1 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_ego_star_s1
+zs_pm_rewire_s1    scripts/run_experiment.py --task nc --dataset pubmed --mask-family random_rewire --seed 1 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_rewire_s1
+
+zs_cora_none_s2    scripts/run_experiment.py --task nc --dataset cora --mask-family none          --seed 2 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_none_s2
+zs_cora_star_s2    scripts/run_experiment.py --task nc --dataset cora --mask-family star          --seed 2 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_star_s2
+zs_cora_ego_s2     scripts/run_experiment.py --task nc --dataset cora --mask-family ego           --seed 2 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_ego_s2
+zs_cora_egostar_s2 scripts/run_experiment.py --task nc --dataset cora --mask-family ego_star      --seed 2 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_ego_star_s2
+zs_cora_rewire_s2  scripts/run_experiment.py --task nc --dataset cora --mask-family random_rewire --seed 2 --no-lora --limit-eval 300 --out experiments/titan3/Z_cora_rewire_s2
+
+zs_pm_none_s2      scripts/run_experiment.py --task nc --dataset pubmed --mask-family none          --seed 2 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_none_s2
+zs_pm_star_s2      scripts/run_experiment.py --task nc --dataset pubmed --mask-family star          --seed 2 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_star_s2
+zs_pm_ego_s2       scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego           --seed 2 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_ego_s2
+zs_pm_egostar_s2   scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego_star      --seed 2 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_ego_star_s2
+zs_pm_rewire_s2    scripts/run_experiment.py --task nc --dataset pubmed --mask-family random_rewire --seed 2 --no-lora --limit-eval 300 --out experiments/titan3/Z_pm_rewire_s2
