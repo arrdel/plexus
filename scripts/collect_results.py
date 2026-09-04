@@ -201,10 +201,10 @@ def table_ladder(runs: list[dict], task: str, dataset: str = "cora",
     ref_rows = [r"  \midrule",
                 r"  \multicolumn{5}{l}{\emph{reported by \citet{tagdlm2026}, "
                 r"not reproduced here}} \\",
-                f"  \\texttt{{star}} & their number & --- & {ref:.2f} & --- \\\\"
+                f"  \\texttt{{star}} & their number & n/a & {ref:.2f} & n/a \\\\"
                 if ref else ""]
     if ego_ref:
-        ref_rows.append(f"  \\texttt{{ego}} & their ablation & --- & {ego_ref:.2f} & --- \\\\")
+        ref_rows.append(f"  \\texttt{{ego}} & their ablation & n/a & {ego_ref:.2f} & n/a \\\\")
     rows.extend([r for r in ref_rows if r])
     return "\n".join(rows)
 
@@ -212,7 +212,7 @@ def table_ladder(runs: list[dict], task: str, dataset: str = "cora",
 def table_density(measured: dict | None) -> str:
     """The standalone density measurement, which needs no training run."""
     if not measured:
-        return r"  \multicolumn{5}{l}{\pending{} --- run \texttt{scripts/measure\_densities.py}} \\"
+        return r"  \multicolumn{5}{l}{\pending{}: run \texttt{scripts/measure\_densities.py}} \\"
     rows = []
     for fam in ORDER + ["hop_bias"]:
         label = (r"\textsc{HopBias} (graded)" if fam == "hop_bias" else FAMILY_TEX[fam])
@@ -308,6 +308,13 @@ def zeroshot_macros(runs: list[dict]) -> list[str]:
         accs = sorted(100 * r["accuracy"] for r in sel)
         out.append(rf"\newcommand{{\zsseedspread{name}}}{{"
                    + (f"{accs[-1] - accs[0]:.2f}" if len(accs) > 1 else r"\pending") + "}")
+        # star minus its density-matched random control. The star mask is the baseline's
+        # structural claim; random_rewire keeps its density and destroys its structure. If the
+        # difference is smaller than the seed spread, the frozen model is not reading structure.
+        s = agg(select(runs, task="nc", family="star", dataset=ds, no_lora=True))
+        w = agg(select(runs, task="nc", family="random_rewire", dataset=ds, no_lora=True))
+        out.append(rf"\newcommand{{\zsstarvsrewire{name}}}{{"
+                   + (f"{s[0] - w[0]:+.2f}" if s and w else r"\pending") + "}")
     return out
 
 
@@ -324,7 +331,7 @@ def noise_floor_macros(runs: list[dict]) -> list[str]:
                     rows.append(f"  {task.upper()} & {arm} & {seed} & {spread:.2f} & "
                                 f"{', '.join(g.replace('NVIDIA ', '') for g in gpus)} \\\\")
     if not rows:
-        rows = [r"  \multicolumn{5}{l}{\pending{} --- no seed has yet run on both machines} \\"]
+        rows = [r"  \multicolumn{5}{l}{\pending{}: no seed has yet run on both machines} \\"]
     return [
         r"\newcommand{\noisefloorbody}{%",
         "\n".join(rows),
