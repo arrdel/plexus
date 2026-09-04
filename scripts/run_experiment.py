@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 from dataclasses import asdict
 from pathlib import Path
 
@@ -152,6 +153,13 @@ def main():
             "no_lora": args.no_lora,
             "text_coverage": tag.text_coverage,
             "n_trainable": n_trainable,
+            # Arms are compared across two machines with different GPUs. Recording which one ran a
+            # given arm is what lets a difference between arms be checked against the difference
+            # between hardware, instead of being assumed to be the method.
+            "host": platform.node(),
+            "gpu": (torch.cuda.get_device_name(args.device)
+                    if str(args.device).startswith("cuda") else "cpu"),
+            "torch": torch.__version__,
         },
     )
 

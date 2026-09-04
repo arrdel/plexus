@@ -1,0 +1,43 @@
+# PubMed confirmatory queue. Cora is the diagnostic; this is the check that a conclusion drawn on
+# 2708 nodes survives 19717.
+#
+#   ONLY_GPU=4 ./scripts/run_queue.sh scripts/queue_pubmed.txt &
+#   ONLY_GPU=5 ./scripts/run_queue.sh scripts/queue_pubmed.txt &   ... etc
+#
+# Why 3 epochs and not 20:
+#   PubMed's train split is 11830 examples against Cora's 1624. Holding *epochs* fixed would give
+#   PubMed 7.3x Cora's optimisation budget and cost 90 h per arm, and any difference between the
+#   two datasets would then confound dataset with budget. Holding the *example budget* fixed
+#   instead: Cora 20 x 1624 = 32480 examples, PubMed 3 x 11830 = 35490, within 9%. So 3 epochs.
+#   Evaluation every epoch, since there are only three.
+#
+# Why random_rewire is absent:
+#   It is the density control for ego_star and the most droppable arm in the plan. Cora carries
+#   the density argument; repeating it here buys little for 13.5 h.
+#
+# Caution recorded before the first result arrives: a smoke run with no completed optimiser step
+# already scored 91.67 (n=24) on PubMed NC, against TAG-DLM's reported 96.30, on a 3-class
+# problem. If that survives a real run of the `none` arm, PubMed NC is close to saturated by text
+# alone and cannot discriminate between structure encodings -- which would itself be a result, and
+# is why `none` is first in this queue rather than last.
+
+pm_none_nc_s0     scripts/run_experiment.py --task nc --dataset pubmed --mask-family none        --seed 0 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_none_nc_s0
+pm_star_nc_s0     scripts/run_experiment.py --task nc --dataset pubmed --mask-family star        --seed 0 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_star_nc_s0
+pm_ego_nc_s0      scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego         --seed 0 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_ego_nc_s0
+pm_egostar_nc_s0  scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego_star    --seed 0 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_ego_star_nc_s0
+pm_hopbias_nc_s0  scripts/run_experiment.py --task nc --dataset pubmed --mask-family none --hop-bias-buckets 6 --seed 0 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P1_hopbias_nc_s0
+pm_hopbias_ans_nc_s0 scripts/run_experiment.py --task nc --dataset pubmed --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 0 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P1_hopbias_answer_nc_s0
+
+pm_none_nc_s1     scripts/run_experiment.py --task nc --dataset pubmed --mask-family none        --seed 1 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_none_nc_s1
+pm_star_nc_s1     scripts/run_experiment.py --task nc --dataset pubmed --mask-family star        --seed 1 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_star_nc_s1
+pm_ego_nc_s1      scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego         --seed 1 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_ego_nc_s1
+pm_egostar_nc_s1  scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego_star    --seed 1 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_ego_star_nc_s1
+pm_hopbias_nc_s1  scripts/run_experiment.py --task nc --dataset pubmed --mask-family none --hop-bias-buckets 6 --seed 1 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P1_hopbias_nc_s1
+pm_hopbias_ans_nc_s1 scripts/run_experiment.py --task nc --dataset pubmed --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 1 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P1_hopbias_answer_nc_s1
+
+pm_none_nc_s2     scripts/run_experiment.py --task nc --dataset pubmed --mask-family none        --seed 2 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_none_nc_s2
+pm_star_nc_s2     scripts/run_experiment.py --task nc --dataset pubmed --mask-family star        --seed 2 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_star_nc_s2
+pm_ego_nc_s2      scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego         --seed 2 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_ego_nc_s2
+pm_egostar_nc_s2  scripts/run_experiment.py --task nc --dataset pubmed --mask-family ego_star    --seed 2 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P0_ego_star_nc_s2
+pm_hopbias_nc_s2  scripts/run_experiment.py --task nc --dataset pubmed --mask-family none --hop-bias-buckets 6 --seed 2 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P1_hopbias_nc_s2
+pm_hopbias_ans_nc_s2 scripts/run_experiment.py --task nc --dataset pubmed --mask-family none --hop-bias-buckets 6 --hop-bias-answer-as-target --seed 2 --epochs 3 --eval-every-epochs 1 --out experiments/titan3/P1_hopbias_answer_nc_s2

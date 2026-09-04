@@ -39,7 +39,13 @@ export PLEXUS_DATA_ROOT=${PLEXUS_DATA_ROOT:-/tmp/adelechinda/plexus_data}
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 export TOKENIZERS_PARALLELISM=false
 
-PYTHON="$REPO/.venv/bin/python"
+# ai-lab2 has a venv in the repo; titan3 runs from a conda env. Both hosts must use interpreters
+# with the same torch build, or a difference between arms could be a difference between libraries.
+PYTHON=${PLEXUS_PYTHON:-"$REPO/.venv/bin/python"}
+if [[ ! -x "$PYTHON" ]]; then
+  echo "no interpreter at $PYTHON; set PLEXUS_PYTHON" >&2
+  exit 1
+fi
 MARKS="$REPO/logs/queue"
 mkdir -p "$MARKS" "$REPO/logs"
 MAIN_LOG="$REPO/logs/queue_w${WORKER}_$(date +%Y%m%d_%H%M%S).log"

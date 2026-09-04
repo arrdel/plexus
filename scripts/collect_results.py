@@ -47,11 +47,15 @@ ORDER = ["none", "star", "ego", "ego_star", "random_rewire"]
 
 
 def load_runs(exp_dir: Path) -> list[dict]:
+    """Every run directory under `exp_dir`, at any depth.
+
+    Searching recursively lets results from two machines live side by side, as
+    `experiments/<host>/<run>`, without one host's run directory overwriting the other's when the
+    two chose the same name -- which they do, because they read the same queue file.
+    """
     runs = []
-    for d in sorted(exp_dir.iterdir()):
-        f = d / "result.json"
-        if not (d.is_dir() and f.exists()):
-            continue
+    for f in sorted(exp_dir.rglob("result.json")):
+        d = f.parent
         r = json.loads(f.read_text())
         h = {}
         hf = d / "history.json"
@@ -61,26 +65,59 @@ def load_runs(exp_dir: Path) -> list[dict]:
             except json.JSONDecodeError:
                 h = {}
         cfg = h.get("config", {})
-        r["_dir"] = d.name
+        r["_dir"] = str(d.relative_to(exp_dir))
         r["_epochs"] = cfg.get("epochs")
         r["_hop_buckets"] = cfg.get("hop_bias_buckets")
         r["_answer_as_target"] = cfg.get("hop_bias_answer_as_target", False)
         r["_dataset"] = cfg.get("dataset", "cora")
-        r["_smoke"] = d.name.startswith("smoke")
+        r["_smoke"] = "smoke" in d.name
+        prov = cfg.get("provenance", {}) or {}
+        r["_gpu"] = prov.get("gpu")
+        r["_host"] = prov.get("host")
         runs.append(r)
     return runs
 
 
 def agg(runs: list[dict]) -> tuple[float, float, int] | None:
-    """Mean, sample std and n over seeds. Returns None when there is nothing to report."""
+    """Mean, sample std and n over *distinct seeds*. None when there is nothing to report.
+
+    Grouping by seed matters because the same seed is deliberately run on both machines. Those
+    replicates measure the hardware's numerical noise, not seed variance, and counting them as
+    extra seeds would shrink the reported standard deviation towards zero for the wrong reason.
+    A seed with replicates contributes their mean, and the spread within a seed is reported
+    separately by `replicate_spread`.
+    """
     if not runs:
         return None
-    accs = [100 * r["accuracy"] for r in runs]
+    by_seed: dict[int, list[float]] = {}
+    for r in runs:
+        by_seed.setdefault(r.get("seed", 0), []).append(100 * r["accuracy"])
+    accs = [sum(v) / len(v) for v in by_seed.values()]
     m = sum(accs) / len(accs)
     if len(accs) < 2:
         return m, float("nan"), 1
     var = sum((a - m) ** 2 for a in accs) / (len(accs) - 1)
     return m, math.sqrt(var), len(accs)
+
+
+def replicate_spread(runs: list[dict]) -> list[tuple[int, float, list[str]]]:
+    """Per-seed range across machines, for seeds that ran more than once.
+
+    This is the noise floor: no difference between arms smaller than this is interpretable, and
+    it costs nothing to measure because the replicates exist as a by-product of using two
+    machines with different GPUs.
+    """
+    by_seed: dict[int, list[dict]] = {}
+    for r in runs:
+        by_seed.setdefault(r.get("seed", 0), []).append(r)
+    out = []
+    for seed, rs in sorted(by_seed.items()):
+        if len(rs) < 2:
+            continue
+        accs = [100 * r["accuracy"] for r in rs]
+        gpus = sorted({r.get("_gpu") or "unknown" for r in rs})
+        out.append((seed, max(accs) - min(accs), gpus))
+    return out
 
 
 def cell(a: tuple[float, float, int] | None) -> str:
@@ -156,8 +193,8 @@ def table_ladder(runs: list[dict], task: str, dataset: str = "cora",
     ref = TAGDLM.get((dataset, task))
     ego_ref = TAGDLM_EGO.get((dataset, task))
     ref_rows = [r"  \midrule",
-                f"  \\multicolumn{{5}}{{l}}{{\\emph{{reported by \\citet{{tagdlm2026}}, "
-                f"not reproduced here}}}} \\\\",
+                r"  \multicolumn{5}{l}{\emph{reported by \citet{tagdlm2026}, "
+                r"not reproduced here}} \\",
                 f"  \\texttt{{star}} & their number & --- & {ref:.2f} & --- \\\\"
                 if ref else ""]
     if ego_ref:
@@ -234,6 +271,29 @@ def table_throughput(exp_dir: Path) -> tuple[str, str]:
     return "\n".join(rows), macro
 
 
+def noise_floor_macros(runs: list[dict]) -> list[str]:
+    """The largest same-seed disagreement anywhere in the grid, and the table behind it."""
+    rows, worst = [], 0.0
+    for task in ("nc", "lp"):
+        for fam in ORDER:
+            for hb, ans in ((None, False), (6, False), (6, True)):
+                sel = select(runs, task=task, family=fam, hop_buckets=hb, answer_as_target=ans)
+                for seed, spread, gpus in replicate_spread(sel):
+                    worst = max(worst, spread)
+                    arm = FAMILY_TEX[fam] if hb is None else r"\textsc{HopBias}"
+                    rows.append(f"  {task.upper()} & {arm} & {seed} & {spread:.2f} & "
+                                f"{', '.join(g.replace('NVIDIA ', '') for g in gpus)} \\\\")
+    if not rows:
+        rows = [r"  \multicolumn{5}{l}{\pending{} --- no seed has yet run on both machines} \\"]
+    return [
+        r"\newcommand{\noisefloorbody}{%",
+        "\n".join(rows),
+        "}",
+        r"\newcommand{\noisefloor}{" + (f"{worst:.2f}" if worst else r"\pending") + "}",
+        r"\newcommand{\nreplicates}{" + str(len([r for r in rows if "multicolumn" not in r])) + "}",
+    ]
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--experiments", default="experiments")
@@ -256,7 +316,7 @@ def main():
     print(f"{len(runs)} run directories, {len(real)} non-smoke")
     for r in runs:
         tag = " (smoke)" if r["_smoke"] else ""
-        print(f"  {r['_dir']:34s} {r.get('task')} {r.get('mask_family'):14s} "
+        print(f"  {r['_dir']:44s} {r.get('task')} {r.get('mask_family'):14s} "
               f"acc={100 * r['accuracy']:6.2f} n={r['n']:4d} "
               f"rho={r.get('mask_density', float('nan')):.3f}{tag}")
 
@@ -281,6 +341,8 @@ def main():
         "",
         r"\newcommand{\densityn}{"
         + (str(measured.get("limit")) if measured else "0") + "}",
+        "",
+        *noise_floor_macros(real),
         "",
         r"\newcommand{\throughputbody}{%",
         thr_body,
