@@ -734,3 +734,67 @@ completed optimiser step** scored 91.67 (n=24) on PubMed NC, against TAG-DLM's r
 a 3-class problem. If the real `none` arm confirms it, **PubMed NC is close to saturated by text
 alone and cannot discriminate between structure encodings** — which would itself be a finding, and
 is why `none` is first in the PubMed queue rather than last. 82 tests pass.
+
+---
+
+## E0.0l — An rsync flag destroyed two finished runs (2026-09-04, 07:30–07:45)
+
+Recorded in full because the loss was self-inflicted and the mechanism is easy to repeat.
+
+**What happened.** Code was pushed to ai-lab2 with
+
+    rsync -az --exclude 'data' ... ./ ai-lab2:projects/plexus/
+
+`data` has no leading slash, so it matches **any** directory named `data` at any depth —
+including `plexus/data/`, the package holding the dataset loaders. The remote had therefore been
+running stale loader code for hours while every sync reported success. It surfaced only when the
+new PubMed import failed on the remote test run.
+
+The fix I reached for was `--delete-excluded`, on the belief that it would clean up stale
+excluded content. **It does the opposite of what excluding a path means: it deletes the excluded
+paths from the destination.** One command removed ai-lab2's `.venv`, `checkpoints/`, `data/`,
+`logs/`, `baselines/` and `experiments/`.
+
+**What was lost.** `star` seed 0 and `ego_star` seed 0 had *finished* — eight hours each, at
+step 240/253 forty minutes earlier — and their `result.json` files were in `experiments/`. They
+were never rsynced back, so they are gone. That is 16 GPU-hours and the first two real accuracy
+numbers this project has ever produced.
+
+**What survived, and why.** `HF_HOME=/tmp/adelechinda/hf` and
+`PLEXUS_DATA_ROOT=/tmp/adelechinda/plexus_data` live outside the repo, so the 15 GB checkpoint and
+the 2.2 GB corpus were untouched; the repo-local copies were redundant. titan3 was unaffected — it
+was the rsync *source* — so all four of its arms kept running. Only the venv had to be rebuilt,
+and only because it lived inside the repo.
+
+**Why the science is intact.** titan3 is running `star` s0 and `ego_star` s0 itself, so the two
+destroyed runs are being reproduced; what was actually lost is the *cross-hardware replicate*, not
+a result. That is the one thing in the grid whose loss costs nothing but time.
+
+**Changes made so this cannot recur.**
+
+1. `scripts/sync_hosts.sh` replaces the ad-hoc rsync line. Every exclude is anchored with a
+   leading slash, nothing is deleted, and it compares per-file checksums across hosts afterwards
+   rather than trusting rsync's exit status. Excluding a path now means "this host owns its copy".
+2. The queue exports `PYTHONPATH` instead of assuming `pip install -e .`.
+3. **The queue stops after two failures that each take under two minutes.** The rebuilt venv
+   lacked the editable install, so the first job failed on import in one second — and the queue
+   then consumed all six remaining jobs at a second apiece and marked every one attempted. A fast
+   failure is a property of the host, not of the job.
+4. `pkill -f run_queue.sh` over ssh killed the ssh session itself, because the pattern matched the
+   remote command line. Use `pgrep -f 'run_[q]ueue'`, or kill by PID.
+
+**Rebalanced afterwards.** ai-lab2 was about to re-run `ego` and `none`, which titan3 already has.
+It now runs the two graded-bias arms instead, pulling the paper's method result about thirteen
+hours earlier. In flight: titan3 0–3 on `star`/`none`/`ego`/`ego_star`, ai-lab2 0–1 on
+`HopBias` and `HopBias + answer grading`, all NC seed 0, 20 epochs.
+
+**Two observations worth keeping.**
+
+- Both graded arms open at loss **0.3311** against `none`'s **0.3325** on the other host. A
+  zero-initialised graded bias is supposed to *be* the unmodified model, and at step 1 it measures
+  as such. The residual 0.0014 is a 4090-versus-A6000 difference, i.e. a first read on the noise
+  floor.
+- Before it was killed, the ai-lab2 `star` run reached **loss 0.0000 by epoch 18**. Twenty epochs
+  on 1624 examples with a 167.8 M-parameter adapter memorises the training set completely. The
+  `--eval-every-epochs 4` curve exists precisely to show where test accuracy peaked, and the epoch
+  budget should be re-set from it rather than from the plan's guess.
