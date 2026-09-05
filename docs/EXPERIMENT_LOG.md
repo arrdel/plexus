@@ -972,3 +972,63 @@ There is no spare capacity to re-run it: all 8 titan3 cards are busy with the Co
 **Neither run stored per-example predictions**, since both predate commit `2b5e0d1`, so the
 McNemar comparison cannot be applied to the +1.84 point gap. The LP grid remains the first place it
 will be usable.
+
+---
+
+## E0.0p: the LP grid lands, and the +1.84 point answer-grading gap evaporates
+
+**Date.** 2026-09-05, submission day.
+
+### The measurement that matters
+
+Cora link prediction, seed 0, n=452, 6 epochs, all four hard families complete:
+
+| arm | acc. | vs `ego` |
+|---|---|---|
+| `ego_star` (ours) | **90.49** | +18.14 |
+| `none` | 89.82 | +17.47 |
+| `star` | 88.27 | +15.93 |
+| `ego` | 72.35 | -- |
+
+The ego collapse reproduces: `star` -> `ego` costs 15.93 points, against the 29.86 reported. But
+`ego_star`, which keeps **every** neighbour-to-neighbour edge and restores only the target's
+reach, recovers 18.14 of them and finishes 2.21 points **above** `star`. Real topology does not
+hurt. Losing the target's reach hurts, and the ego mask loses it as a side effect.
+
+This is claim C2, measured, and the prediction preceded the measurement: `ego_star` was designed
+and its three possible outcomes written down in the paper before any LP run existed.
+
+`none` also beats `star` by 1.55, so on this harness the baseline's mask does not pay for itself.
+`ego_star` over `none` is only +0.66, below the noise floor, so no claim is made from it.
+
+### The correction
+
+E0.0o reported that grading the answer row was worth **+1.84 points**, from `HopBias` 87.64 and
+`HopBias`+answer 89.48, both on ai-lab2. Both configurations had *also* been queued on titan3, and
+those runs finished overnight: `HopBias` **88.75**, `HopBias`+answer **88.19**. Same seed, same
+config, same code, different card.
+
+| arm | ai-lab2 | titan3 | mean | spread |
+|---|---|---|---|---|
+| `HopBias` | 87.64 | 88.75 | 88.20 | 1.11 |
+| `HopBias` + answer | 89.48 | 88.19 | 88.84 | 1.29 |
+
+Averaged over both hosts the answer-grading gap is **+0.65**, and the replicate spread within a
+single configuration is 1.11 to 1.29. **The sign of the effect flips depending on which card you
+read.** The +1.84 was within-host noise, reported because only one host had finished.
+
+The accidental by-product is the most useful number in the project: a **measured noise floor of
+1.29 points**, from configurations that differ in nothing but floating-point accumulation order.
+It is now the paper's unit of resolution, and it retires the entire trained Cora NC ladder, which
+spans 1.48 points top to bottom with the density-matched *random* control on top.
+
+**The lesson, which is E0.0m's lesson again.** A single-host, single-seed difference is not a
+result, even when it confirms a prediction the paper made in advance. The answer-grading mechanism
+may well be real; NC cannot see it, and the LP graded arms are still running.
+
+### Status at submission
+
+Main paper converted to NeurIPS 2026 workshop style (DiffuLM), single column, eight pages of body
+plus references and a thirteen-page appendix. Four LP cells remain `\pending`: `random_rewire`,
+both graded arms, and seed 1 of `none`. At epoch 3 of 6 the graded arm reads 90.49 and
+`random_rewire` 87.83, but E0.0n is the standing reason not to quote a mid-run evaluation.
