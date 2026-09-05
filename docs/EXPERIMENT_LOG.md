@@ -1097,3 +1097,74 @@ results when they are specifications. All fixed.
 
 Gaps are computed before rounding, so three of them differ by a hundredth from the difference of
 the displayed cells. The paper now says so.
+---
+
+## E0.0r -- The link-prediction grid completes, and the density control delivers
+
+**Date:** 2026-09-05, 11:27. **Cost:** four runs, ~12 h each, one per A6000 on titan3.
+
+The four arms that were `\pending` at the start of the day finished. The Cora LP ladder, seed 0
+unless noted, n=452, 6 epochs:
+
+| arm | rho | acc. | vs ego |
+|---|---|---|---|
+| `ego_star` (ours) | 0.460 | **90.49** | +18.14 |
+| `HopBias` (ours) | 1.000 | 89.82 | +17.47 |
+| `none` | 1.000 | 89.80 (2 seeds, +/-0.03) | +17.45 |
+| `HopBias` + answer grading | 1.000 | 89.60 | +17.25 |
+| `star` | 0.388 | 88.27 | +15.93 |
+| `random_rewire` | 0.460 | 87.83 | +15.48 |
+| `ego` | 0.292 | 72.35 | -- |
+
+### The density control is the result worth having
+
+`random_rewire` came out at rho = 0.460, matching `ego_star` to three decimals, which is what it
+was built to do. Same context volume, same number of edges, every real neighbour-neighbour edge
+replaced by a random one. It gives up **2.65 points** at **p = 0.045**.
+
+And the mirror comparison says the volume itself is worth nothing: adding those same random edges
+to the star mask moves **nothing**, p = 0.789 on 14 discordant examples out of 452, the highest
+decision agreement anywhere in the paper (96.9%).
+
+Real edges of a given volume are worth something. Random edges of the same volume are not. This is
+the only place in the project where topology *per se* is shown to carry information, and it is
+the positive half of C1. It rests on 30 discordant examples and is the weakest of the three
+significant tests, which the Limitations section now says.
+
+### The graded arm is a null, and is written as one
+
+`HopBias` LP reaches 89.82. That is +1.55 over `star`, but p = 0.310, and it is indistinguishable
+from `ego_star` above it at p = 0.749. It is also numerically identical to `none` seed 0 (89.82).
+
+Given the freedom to place any bias indexed by shortest-path distance, the model found nothing
+better than the attention it already had. That is consistent with the frozen ladder, with the NC
+ladder, and with C1. **C3 now stands as Proposition 2 proves it -- a statement about what the
+family can express -- and not as a demonstration that Cora needs the expressiveness.** The
+abstract and conclusion were rewritten to say this rather than to gesture at the graded bias as
+the natural next step.
+
+Answer grading: **-0.22** on LP against +0.65 on NC, p = 1.000, 9 discordant to 10. The mechanism
+of the answer-position gap has no empirical support on either task. The argument for the variant
+is that the naive version is provably a no-op on the row that produces the prediction, not that
+it wins points, and that is now how the paper puts it.
+
+### LP is far more stable across seeds than NC
+
+`none` at seeds 0 and 1: 89.82 and 89.78. A spread of **0.03 points**, against the 8.00 points the
+frozen NC ladder shows. Whatever makes NC unreadable is not present here, which is worth knowing
+before spending seeds.
+
+### What we cannot say, and why
+
+**The fitted lambda was never persisted.** The harness writes accuracies, predictions and a
+training history, but not the adapter. So we can report that the graded family found nothing
+better than full attention, and we cannot report whether lambda stayed near zero or learned a
+shape and gained nothing by it. Those are different findings and the accuracy cannot separate
+them. Appendix F.6 now says this in place of promising the diagnostic, and it is the first item on
+the roadmap because it costs nothing to fix.
+
+### Submission state
+
+Body 8 pages, references p9, appendix 17 pages, 26 total. No `\pending` marker anywhere in the
+PDF: every cell has a run behind it. No unresolved references, no overfull boxes above 5pt, zero
+em-dashes, 82 tests passing, ruff clean.
