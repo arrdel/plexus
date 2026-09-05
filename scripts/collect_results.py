@@ -209,6 +209,51 @@ def table_ladder(runs: list[dict], task: str, dataset: str = "cora",
     return "\n".join(rows)
 
 
+def table_ladder_both(runs: list[dict], dataset: str = "cora",
+                      measured: dict | None = None) -> str:
+    """Both tasks in one table, so the contrast between them is a glance rather than a page turn.
+
+    Node classification and link prediction share the ladder and the protocol and differ only in
+    whether the ladder separates, which is the point being made, so they belong in one frame.
+    """
+    tasks = ("nc", "lp")
+
+    def arm(label: str, note: str, sel_by_task: dict[str, list]) -> str:
+        cells = []
+        for t in tasks:
+            s = sel_by_task[t]
+            cells.append(f"{density_cell(s, measured, t, sel_by_task['_fam'])} & {cell(agg(s))}")
+        return f"  {label} & {note} & " + " & ".join(cells) + r" \\"
+
+    rows = []
+    for fam in ORDER:
+        by = {t: select(runs, task=t, family=fam, dataset=dataset) for t in tasks}
+        by["_fam"] = fam
+        rows.append(arm(FAMILY_TEX[fam], FAMILY_NOTE[fam], by))
+
+    rows.append(r"  \midrule")
+    for ans, label, note in ((False, r"\textsc{HopBias}", r"graded, learned $\lambda$ (ours)"),
+                             (True, r"\quad + answer grading",
+                              r"also grades \texttt{[M]} (ours)")):
+        by = {t: select(runs, task=t, family="none", dataset=dataset, hop_buckets=6,
+                        answer_as_target=ans) for t in tasks}
+        by["_fam"] = "hop_bias"
+        rows.append(arm(label, note, by))
+
+    refs = {t: (TAGDLM.get((dataset, t)), TAGDLM_EGO.get((dataset, t))) for t in tasks}
+    if any(r[0] for r in refs.values()):
+        rows.append(r"  \midrule")
+        rows.append(r"  \multicolumn{6}{l}{\emph{reported by \citet{tagdlm2026}, "
+                    r"not reproduced here}} \\")
+        for idx, name in ((0, r"\texttt{star}"), (1, r"\texttt{ego}")):
+            if not any(refs[t][idx] for t in tasks):
+                continue
+            cells = " & ".join(
+                "n/a & " + (f"{refs[t][idx]:.2f}" if refs[t][idx] else "n/a") for t in tasks)
+            rows.append(f"  {name} & their number & {cells} \\\\")
+    return "\n".join(rows)
+
+
 def table_density(measured: dict | None) -> str:
     """The standalone density measurement, which needs no training run."""
     if not measured:
@@ -318,6 +363,53 @@ def zeroshot_macros(runs: list[dict]) -> list[str]:
     return out
 
 
+def ladder_macros(runs: list[dict], task: str) -> list[str]:
+    """Per-arm accuracies and the gaps the argument turns on, for one task.
+
+    Gaps are differences of the measured means rather than of the rounded table cells, so that a
+    number quoted in the prose can never disagree with the table by a rounding step. The spread is
+    what the whole ladder occupies, which is the quantity to compare against the noise floor.
+    """
+    def m(fam: str, hb: int | None = None, ans: bool = False) -> float | None:
+        a = agg(select(runs, task=task, family=fam, dataset="cora",
+                       hop_buckets=hb, answer_as_target=ans))
+        return a[0] if a else None
+
+    p, out = task, []
+    vals = {f: m(f) for f in ORDER}
+    vals["hopbias"] = m("none", hb=6, ans=False)
+    vals["hopbiasans"] = m("none", hb=6, ans=True)
+    for fam, val in vals.items():
+        name = fam.replace("_", "")
+        out.append(rf"\newcommand{{\{p}{name}}}{{"
+                   + (f"{val:.2f}" if val is not None else r"\pending") + "}")
+
+    def gap(a: str, b: str, macro: str, signed: bool = False) -> None:
+        x, y = vals[a], vals[b]
+        fmt = "+.2f" if signed else ".2f"
+        out.append(rf"\newcommand{{\{p}{macro}}}{{"
+                   + (format(x - y, fmt) if x is not None and y is not None else r"\pending")
+                   + "}")
+
+    # The collapse as the baseline frames it, and the recovery the one-edge-set repair produces.
+    gap("star", "ego", "collapse")
+    gap("ego_star", "ego", "recovery")
+    gap("ego_star", "star", "egostarvsstar", signed=True)
+    gap("ego_star", "none", "egostarvsnone", signed=True)
+    gap("none", "star", "nonevsstar", signed=True)
+    gap("hopbiasans", "hopbias", "answergain", signed=True)
+
+    hard = [v for k, v in vals.items() if k in ORDER and v is not None]
+    out.append(rf"\newcommand{{\{p}spread}}{{"
+               + (f"{max(hard) - min(hard):.2f}" if len(hard) > 1 else r"\pending") + "}")
+
+    ref = TAGDLM.get(("cora", task))
+    out.append(rf"\newcommand{{\{p}stargap}}{{"
+               + (f"{ref - vals['star']:.2f}" if ref and vals["star"] is not None
+                  else r"\pending") + "}")
+    return out
+
+
 def noise_floor_macros(runs: list[dict]) -> list[str]:
     """The largest same-seed disagreement anywhere in the grid, and the table behind it."""
     rows, worst = [], 0.0
@@ -327,7 +419,12 @@ def noise_floor_macros(runs: list[dict]) -> list[str]:
                 sel = select(runs, task=task, family=fam, hop_buckets=hb, answer_as_target=ans)
                 for seed, spread, gpus in replicate_spread(sel):
                     worst = max(worst, spread)
-                    arm = FAMILY_TEX[fam] if hb is None else r"\textsc{HopBias}"
+                    if hb is None:
+                        arm = FAMILY_TEX[fam]
+                    elif ans:
+                        arm = r"\textsc{HopBias} + answer grading"
+                    else:
+                        arm = r"\textsc{HopBias}"
                     rows.append(f"  {task.upper()} & {arm} & {seed} & {spread:.2f} & "
                                 f"{', '.join(g.replace('NVIDIA ', '') for g in gpus)} \\\\")
     if not rows:
@@ -372,7 +469,16 @@ def main():
         f"% {len(real)} non-smoke runs were on disk when this was written.",
         "",
         r"\newcommand{\pending}{\textcolor{plxred}{\textsc{pending}}}",
-        r"\newcommand{\nrunsnc}{" + str(len(real)) + "}",
+        # Trained and frozen runs are counted separately: they answer different questions, and a
+        # single total silently implies more training than has actually happened.
+        r"\newcommand{\nrunsnc}{"
+        + str(len([r for r in real if not r["_no_lora"]])) + "}",
+        r"\newcommand{\nrunszs}{"
+        + str(len([r for r in real if r["_no_lora"]])) + "}",
+        "",
+        *ladder_macros(runs, "nc"),
+        "",
+        *ladder_macros(runs, "lp"),
         "",
         r"\newcommand{\ladderNCbody}{%",
         table_ladder(runs, "nc", "cora", measured),
@@ -380,6 +486,10 @@ def main():
         "",
         r"\newcommand{\ladderLPbody}{%",
         table_ladder(runs, "lp", "cora", measured),
+        "}",
+        "",
+        r"\newcommand{\ladderbothbody}{%",
+        table_ladder_both(runs, "cora", measured),
         "}",
         "",
         r"\newcommand{\densitybody}{%",
