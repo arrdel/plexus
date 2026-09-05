@@ -1032,3 +1032,68 @@ Main paper converted to NeurIPS 2026 workshop style (DiffuLM), single column, ei
 plus references and a thirteen-page appendix. Four LP cells remain `\pending`: `random_rewire`,
 both graded arms, and seed 1 of `none`. At epoch 3 of 6 the graded arm reads 90.49 and
 `random_rewire` 87.83, but E0.0n is the standing reason not to quote a mid-run evaluation.
+---
+
+## E0.0q -- Paired decision-level tests on the LP ladder, and four citation errors
+
+**Date:** 2026-09-05. **Cost:** no GPU time; both findings come from artefacts already on disk.
+
+**Question.** The noise floor of E0.0p tells us whether a gap exceeds the instrument's resolution.
+It cannot tell two arms that decide every example identically from two arms that trade errors and
+land on the same accuracy. That distinction is the one the mask ladder is arguing about: "this
+family contributes nothing" predicts an empty or symmetric set of discordant pairs, not merely a
+small difference of means. Every LP run stores per-example predictions, so the question is
+answerable without training anything.
+
+**Method.** `scripts/compare_decisions.py`, which has been in the repo unused since `2b5e0d1`
+started storing predictions. `scripts/collect_results.py` now calls its `mcnemar` and emits the
+table and the p-values as macros, so the paper cannot drift from them.
+
+### Result: every claim survives, two get sharper
+
+| comparison | isolates | discordant | agree | p |
+|---|---|---|---|---|
+| `star` vs `ego` | the collapse | 109 / 37 | 67.7% | <0.0001 |
+| `ego_star` vs `ego` | restoring reach | 111 / 29 | 69.0% | <0.0001 |
+| `ego_star` vs `star` | reach beyond the star | 16 / 6 | 95.1% | 0.055 |
+| `none` vs `star` | the star's own gain | 18 / 11 | 93.6% | 0.265 |
+| `ego_star` vs `none` | ours over no structure | 19 / 16 | 92.3% | 0.735 |
+| `HopBias`+ans vs `HopBias` (NC) | answer grading | 13 / 16 | 93.5% | 0.710 |
+| `random_rewire` vs `HopBias` (NC) | the rewired control | 17 / 14 | 93.2% | 0.719 |
+
+C2 is not merely a large difference of means: `ego` and `ego_star` agree on only 69% of decisions,
+and the 140 they disagree on run 111 to 29 in `ego_star`'s favour. Restoring reach changes what
+the model decides.
+
+Both comparisons the paper declines to claim stay declined, at p = 0.055 and p = 0.735, which is
+the outcome that makes the refusals credible rather than merely cautious.
+
+The two NC rows are the more interesting half. The withdrawn answer-grading gap is p = 0.710 with
+13 discordant examples against 16, so the two graded arms are **not distinguishable by their
+decisions at all** -- a stronger statement than being separated by less than the floor. And the
+`random_rewire` arm that tops the NC column reaches p = 0.719 against the graded arm, so that
+ordering is an artefact of the seed and not a result against us. E0.0p's retraction now rests on
+a paired test rather than on a heuristic.
+
+### Four citation errors, one of them embarrassing
+
+LLaDA was cited as ICML 2025. It was a **NeurIPS 2025 oral**. The backbone of the entire paper,
+miscited in a submission to a NeurIPS workshop on diffusion language models. Verified against
+OpenReview and the NeurIPS 2025 programme. Three further entries carried an arXiv identifier or a
+journal name in a `booktitle` field of an `inproceedings` entry, which `plainnat` renders as "In
+arXiv preprint arXiv:...": Longformer, GraphText and Sen et al.
+
+**The lesson.** The bibliography was the one artefact in the repository with no test and no
+generator behind it, and it was the one that contained an error surviving several read-throughs.
+The venue of a citation is checkable in the same sense an accuracy is.
+
+### Other corrections this session
+
+Two claims the numbers did not support: the NC ladder "falls inside the noise floor" (it spans
+1.48 against a 1.29 floor, so two arms clear it by 0.19), and `ego_star` "recovers 18.14 of the
+collapsed points" (the collapse is 15.93; nothing can recover more than was lost). The appendix
+promised per-seed values it never printed, and pointed at two capacity controls as though they had
+results when they are specifications. All fixed.
+
+Gaps are computed before rounding, so three of them differ by a hundredth from the difference of
+the displayed cells. The paper now says so.
