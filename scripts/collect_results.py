@@ -16,7 +16,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compare_decisions import mcnemar  # noqa: E402  (path must be set before the import)
 
 # The reported TAG-DLM numbers we are trying to reproduce. Transcribed from the paper; we have no
 # code, so every one of these is a target, not a verified quantity.
@@ -384,6 +388,58 @@ def table_per_seed(runs: list[dict]) -> str:
     return "\n".join(rows)
 
 
+def table_mcnemar(runs: list[dict], task: str, dataset: str = "cora") -> tuple[str, list[str]]:
+    """Paired decision-level tests between adjacent arms of one ladder.
+
+    An accuracy gap and a noise floor together say only whether a difference is larger than the
+    instrument's resolution. They cannot say whether two arms decide the same examples. McNemar
+    conditions on the discordant pairs, which is the population a "the mask changed nothing" claim
+    predicts to be symmetric, so it tests what the ladder is actually arguing about.
+    """
+    def one(spec: tuple[str, int | None, bool]) -> dict | None:
+        fam, hb, ans = spec
+        sel = [r for r in select(runs, task=task, family=fam, dataset=dataset,
+                                 hop_buckets=hb, answer_as_target=ans) if r.get("predictions")]
+        # Lowest seed, so the pair is drawn from one seed rather than across seeds; a
+        # decision-level test is only meaningful over the same examples.
+        return min(sel, key=lambda r: r.get("seed", 0)) if sel else None
+
+    def tex(spec: tuple[str, int | None, bool], short: str) -> str:
+        return short if spec[1] else FAMILY_TEX[spec[0]]
+
+    mask = lambda f: (f, None, False)  # noqa: E731
+    hop, hopans = ("none", 6, False), ("none", 6, True)
+    # Each pair isolates one step of the argument: the collapse, its recovery, the comparisons the
+    # paper declines to claim, and on node classification the answer-grading gap it withdrew.
+    pairs = [
+        (mask("star"), mask("ego"), "the collapse", "star", "ego"),
+        (mask("ego_star"), mask("ego"), "restoring reach", "ours", "ego"),
+        (mask("ego_star"), mask("star"), "reach beyond the star", "ours", "star"),
+        (mask("none"), mask("star"), "the star's own gain", "none", "star"),
+        (mask("ego_star"), mask("none"), "ours over no structure", "ours", "none"),
+        (hopans, hop, "answer grading", r"\textsc{HopBias}+ans", r"\textsc{HopBias}"),
+        (mask("random_rewire"), hop, "the rewired control", "rewire", r"\textsc{HopBias}"),
+    ]
+    rows, macros = [], []
+    for sa, sb, what, na, nb in pairs:
+        a, b = one(sa), one(sb)
+        if a is None or b is None or a["labels"] != b["labels"]:
+            continue
+        m = mcnemar(a, b)
+        p = m["p_value"]
+        ptex = "$<$0.0001" if p < 1e-4 else f"{p:.3f}"
+        rows.append(f"  {tex(sa, na)} vs {tex(sb, nb)} & {what} & "
+                    f"{m['a_right_b_wrong']} / {m['b_right_a_wrong']} & "
+                    f"{100 * m['decision_agreement']:.1f} & {ptex} \\\\")
+        name = f"{task}p{sa[0]}{'ans' if sa[2] else ''}{sb[0]}{'hb' if sb[1] else ''}"
+        macros.append(rf"\newcommand{{\{name.replace('_', '')}}}{{{ptex}}}")
+    body = "\n".join(rows) or (
+        rf"  \multicolumn{{5}}{{l}}{{\pending{{}}: fewer than two {task.upper()} arms "
+        r"store per-example predictions} \\")
+    macros.append(rf"\newcommand{{\{task}npaired}}{{" + str(len(rows)) + "}")
+    return body, macros
+
+
 def ladder_macros(runs: list[dict], task: str) -> list[str]:
     """Per-arm accuracies and the gaps the argument turns on, for one task.
 
@@ -516,6 +572,17 @@ def main():
         r"\newcommand{\perseedbody}{%",
         table_per_seed(runs),
         "}",
+        "",
+        r"\newcommand{\mcnemarlpbody}{%",
+        table_mcnemar(runs, "lp")[0],
+        "}",
+        "",
+        r"\newcommand{\mcnemarncbody}{%",
+        table_mcnemar(runs, "nc")[0],
+        "}",
+        "",
+        *table_mcnemar(runs, "lp")[1],
+        *table_mcnemar(runs, "nc")[1],
         "",
         r"\newcommand{\densitybody}{%",
         table_density(measured),
