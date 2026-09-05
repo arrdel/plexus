@@ -414,9 +414,14 @@ def table_mcnemar(runs: list[dict], task: str, dataset: str = "cora") -> tuple[s
     pairs = [
         (mask("star"), mask("ego"), "the collapse", "star", "ego"),
         (mask("ego_star"), mask("ego"), "restoring reach", "ours", "ego"),
+        (mask("ego_star"), mask("random_rewire"), "real vs random edges, same $\\rho$",
+         "ours", "rewire"),
+        (mask("random_rewire"), mask("star"), "adding random edges", "rewire", "star"),
         (mask("ego_star"), mask("star"), "reach beyond the star", "ours", "star"),
         (mask("none"), mask("star"), "the star's own gain", "none", "star"),
         (mask("ego_star"), mask("none"), "ours over no structure", "ours", "none"),
+        (hop, mask("star"), "grading vs gating", r"\textsc{HopBias}", "star"),
+        (mask("ego_star"), hop, "the best mask vs grading", "ours", r"\textsc{HopBias}"),
         (hopans, hop, "answer grading", r"\textsc{HopBias}+ans", r"\textsc{HopBias}"),
         (mask("random_rewire"), hop, "the rewired control", "rewire", r"\textsc{HopBias}"),
     ]
@@ -431,8 +436,12 @@ def table_mcnemar(runs: list[dict], task: str, dataset: str = "cora") -> tuple[s
         rows.append(f"  {tex(sa, na)} vs {tex(sb, nb)} & {what} & "
                     f"{m['a_right_b_wrong']} / {m['b_right_a_wrong']} & "
                     f"{100 * m['decision_agreement']:.1f} & {ptex} \\\\")
-        name = f"{task}p{sa[0]}{'ans' if sa[2] else ''}{sb[0]}{'hb' if sb[1] else ''}"
-        macros.append(rf"\newcommand{{\{name.replace('_', '')}}}{{{ptex}}}")
+        def slug(s: tuple[str, int | None, bool]) -> str:
+            # The graded arms share mask_family "none", so the bucket count and the answer flag
+            # have to appear in the name or two different comparisons collide on one macro.
+            return s[0].replace("_", "") + ("hb" if s[1] else "") + ("ans" if s[2] else "")
+
+        macros.append(rf"\newcommand{{\{task}p{slug(sa)}{slug(sb)}}}{{{ptex}}}")
     body = "\n".join(rows) or (
         rf"  \multicolumn{{5}}{{l}}{{\pending{{}}: fewer than two {task.upper()} arms "
         r"store per-example predictions} \\")
@@ -471,6 +480,11 @@ def ladder_macros(runs: list[dict], task: str) -> list[str]:
     # The collapse as the baseline frames it, and the recovery the one-edge-set repair produces.
     gap("star", "ego", "collapse")
     gap("ego_star", "ego", "recovery")
+    # The density-matched control: same rho as ego_star, real edges replaced by random ones.
+    gap("ego_star", "random_rewire", "egostarvsrewire", signed=True)
+    gap("random_rewire", "star", "rewirevsstar", signed=True)
+    gap("ego_star", "hopbias", "egostarvshopbias", signed=True)
+    gap("hopbias", "star", "hopbiasvsstar", signed=True)
     gap("ego_star", "star", "egostarvsstar", signed=True)
     gap("ego_star", "none", "egostarvsnone", signed=True)
     gap("none", "star", "nonevsstar", signed=True)
