@@ -363,6 +363,27 @@ def zeroshot_macros(runs: list[dict]) -> list[str]:
     return out
 
 
+def table_per_seed(runs: list[dict]) -> str:
+    """Every trained run on disk, one row each, so the aggregates can be checked against them."""
+    sel = [r for r in runs if not r["_smoke"] and not r["_no_lora"]]
+    if not sel:
+        return r"  \multicolumn{6}{l}{\pending{}: no training run has completed} \\"
+
+    def key(r: dict) -> tuple:
+        return (r.get("task", ""), ORDER.index(r["mask_family"]) if r["mask_family"] in ORDER
+                else len(ORDER), r["_hop_buckets"] or 0, r["_answer_as_target"], r.get("seed", 0))
+
+    rows = []
+    for r in sorted(sel, key=key):
+        fam = FAMILY_TEX.get(r["mask_family"], r["mask_family"])
+        if r["_hop_buckets"]:
+            fam = r"\textsc{HopBias}" + (" + ans" if r["_answer_as_target"] else "")
+        gpu = (r["_gpu"] or "?").replace("NVIDIA ", "").replace("GeForce ", "")
+        rows.append(f"  {r.get('task', '?').upper()} & {fam} & {r.get('seed', '?')} & "
+                    f"{r.get('_epochs', '?')} & {gpu} & {100 * r['accuracy']:.2f} \\\\")
+    return "\n".join(rows)
+
+
 def ladder_macros(runs: list[dict], task: str) -> list[str]:
     """Per-arm accuracies and the gaps the argument turns on, for one task.
 
@@ -490,6 +511,10 @@ def main():
         "",
         r"\newcommand{\ladderbothbody}{%",
         table_ladder_both(runs, "cora", measured),
+        "}",
+        "",
+        r"\newcommand{\perseedbody}{%",
+        table_per_seed(runs),
         "}",
         "",
         r"\newcommand{\densitybody}{%",
