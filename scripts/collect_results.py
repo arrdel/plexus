@@ -396,13 +396,14 @@ def table_mcnemar(runs: list[dict], task: str, dataset: str = "cora") -> tuple[s
     conditions on the discordant pairs, which is the population a "the mask changed nothing" claim
     predicts to be symmetric, so it tests what the ladder is actually arguing about.
     """
-    def one(spec: tuple[str, int | None, bool]) -> dict | None:
+    def bysee(spec: tuple[str, int | None, bool]) -> dict[int, dict]:
         fam, hb, ans = spec
         sel = [r for r in select(runs, task=task, family=fam, dataset=dataset,
                                  hop_buckets=hb, answer_as_target=ans) if r.get("predictions")]
-        # Lowest seed, so the pair is drawn from one seed rather than across seeds; a
-        # decision-level test is only meaningful over the same examples.
-        return min(sel, key=lambda r: r.get("seed", 0)) if sel else None
+        # Keyed by seed, because a decision-level test is only meaningful over the same examples
+        # and different seeds draw different splits. Each seed is reported as its own replicate
+        # rather than pooled, so that agreement between seeds is visible instead of averaged away.
+        return {r.get("seed", 0): r for r in sel}
 
     def tex(spec: tuple[str, int | None, bool], short: str) -> str:
         return short if spec[1] else FAMILY_TEX[spec[0]]
@@ -414,7 +415,7 @@ def table_mcnemar(runs: list[dict], task: str, dataset: str = "cora") -> tuple[s
     pairs = [
         (mask("star"), mask("ego"), "the collapse", "star", "ego"),
         (mask("ego_star"), mask("ego"), "restoring reach", "ours", "ego"),
-        (mask("ego_star"), mask("random_rewire"), "real vs random edges, same $\\rho$",
+        (mask("ego_star"), mask("random_rewire"), "real vs random, same $\\rho$",
          "ours", "rewire"),
         (mask("random_rewire"), mask("star"), "adding random edges", "rewire", "star"),
         (mask("ego_star"), mask("star"), "reach beyond the star", "ours", "star"),
@@ -425,27 +426,36 @@ def table_mcnemar(runs: list[dict], task: str, dataset: str = "cora") -> tuple[s
         (hopans, hop, "answer grading", r"\textsc{HopBias}+ans", r"\textsc{HopBias}"),
         (mask("random_rewire"), hop, "the rewired control", "rewire", r"\textsc{HopBias}"),
     ]
-    rows, macros = [], []
-    for sa, sb, what, na, nb in pairs:
-        a, b = one(sa), one(sb)
-        if a is None or b is None or a["labels"] != b["labels"]:
-            continue
-        m = mcnemar(a, b)
-        p = m["p_value"]
-        ptex = "$<$0.0001" if p < 1e-4 else f"{p:.3f}"
-        rows.append(f"  {tex(sa, na)} vs {tex(sb, nb)} & {what} & "
-                    f"{m['a_right_b_wrong']} / {m['b_right_a_wrong']} & "
-                    f"{100 * m['decision_agreement']:.1f} & {ptex} \\\\")
-        def slug(s: tuple[str, int | None, bool]) -> str:
-            # The graded arms share mask_family "none", so the bucket count and the answer flag
-            # have to appear in the name or two different comparisons collide on one macro.
-            return s[0].replace("_", "") + ("hb" if s[1] else "") + ("ans" if s[2] else "")
+    def slug(s: tuple[str, int | None, bool]) -> str:
+        # The graded arms share mask_family "none", so the bucket count and the answer flag have
+        # to appear in the name or two different comparisons collide on one macro.
+        return s[0].replace("_", "") + ("hb" if s[1] else "") + ("ans" if s[2] else "")
 
-        macros.append(rf"\newcommand{{\{task}p{slug(sa)}{slug(sb)}}}{{{ptex}}}")
+    rows, macros, npairs = [], [], 0
+    for sa, sb, what, na, nb in pairs:
+        ra, rb = bysee(sa), bysee(sb)
+        seeds = sorted(s for s in ra.keys() & rb.keys() if ra[s]["labels"] == rb[s]["labels"])
+        if not seeds:
+            continue
+        npairs += 1
+        for i, s in enumerate(seeds):
+            m = mcnemar(ra[s], rb[s])
+            p = m["p_value"]
+            ptex = "$<$0.0001" if p < 1e-4 else f"{p:.3f}"
+            # The comparison is named once and its replicates indented beneath it, so the eye
+            # reads "this comparison, twice" rather than two unrelated rows.
+            label = f"{tex(sa, na)} vs {tex(sb, nb)}" if i == 0 else ""
+            rows.append(f"  {label} & {what if i == 0 else ''} & {s} & "
+                        f"{m['a_right_b_wrong']} / {m['b_right_a_wrong']} & "
+                        f"{100 * m['decision_agreement']:.1f} & {ptex} \\\\")
+            # LaTeX control sequences are letters only, so the seed is lettered: seed 0 is "sa",
+            # seed 1 "sb", and so on.
+            macros.append(rf"\newcommand{{\{task}p{slug(sa)}{slug(sb)}"
+                          rf"s{chr(ord('a') + s)}}}{{{ptex}}}")
     body = "\n".join(rows) or (
-        rf"  \multicolumn{{5}}{{l}}{{\pending{{}}: fewer than two {task.upper()} arms "
+        rf"  \multicolumn{{6}}{{l}}{{\pending{{}}: fewer than two {task.upper()} arms "
         r"store per-example predictions} \\")
-    macros.append(rf"\newcommand{{\{task}npaired}}{{" + str(len(rows)) + "}")
+    macros.append(rf"\newcommand{{\{task}npaired}}{{" + str(npairs) + "}")
     return body, macros
 
 
@@ -555,6 +565,11 @@ def main():
               f"acc={100 * r['accuracy']:6.2f} n={r['n']:4d} "
               f"rho={r.get('mask_density', float('nan')):.3f}{tag}")
 
+    # Computed once: each call re-reads every stored prediction vector, which is the slowest thing
+    # this script does.
+    mc_lp, mc_nc = table_mcnemar(runs, "lp"), table_mcnemar(runs, "nc")
+    n_tests = sum(r.count(r"\\") for r in (mc_lp[0], mc_nc[0]))
+
     body = [
         "% Generated by scripts/collect_results.py -- do not edit by hand.",
         f"% {len(real)} non-smoke runs were on disk when this was written.",
@@ -588,15 +603,20 @@ def main():
         "}",
         "",
         r"\newcommand{\mcnemarlpbody}{%",
-        table_mcnemar(runs, "lp")[0],
+        mc_lp[0],
         "}",
         "",
         r"\newcommand{\mcnemarncbody}{%",
-        table_mcnemar(runs, "nc")[0],
+        mc_nc[0],
         "}",
         "",
-        *table_mcnemar(runs, "lp")[1],
-        *table_mcnemar(runs, "nc")[1],
+        *mc_lp[1],
+        *mc_nc[1],
+        # We run many paired tests, so an uncorrected 0.05 would be met by chance somewhere in the
+        # table. The corrected threshold is emitted rather than described, so the paper cannot
+        # quietly drift from the number of tests actually performed.
+        rf"\newcommand{{\nptests}}{{{n_tests}}}",
+        rf"\newcommand{{\pthreshold}}{{{0.05 / max(n_tests, 1):.4f}}}",
         "",
         r"\newcommand{\densitybody}{%",
         table_density(measured),

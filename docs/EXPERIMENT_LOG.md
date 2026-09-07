@@ -1168,3 +1168,85 @@ the roadmap because it costs nothing to fix.
 Body 8 pages, references p9, appendix 17 pages, 26 total. No `\pending` marker anywhere in the
 PDF: every cell has a run behind it. No unresolved references, no overfull boxes above 5pt, zero
 em-dashes, 82 tests passing, ruff clean.
+
+## E0.0s -- Second and third seeds land, and multiple comparisons cost us the density claim
+
+The queue kept running after the Sep 5 build. Overnight it finished seed 1 for four LP arms
+(`star`, `ego`, `ego_star`, `HopBias`) and seed 1 or 2 for most NC arms, taking the trained ladder
+from 18 runs to 30. Two things changed, one in our favour and one against.
+
+### The nulls got much better supported
+
+Node classification now carries per-arm standard deviations across seeds, and they are large:
+`ego` at 86.78 +/- 1.59, `HopBias`+ans at 87.50 +/- 1.89, against a whole-ladder spread of 1.78
+points. The spread of the column is smaller than the uncertainty on several cells inside it. The
+paired tests agree and go further: not one NC comparison separates, **including the star-to-ego
+collapse** (p = 0.860 at seed 1, 0.109 at seed 2) that is overwhelming on the other task. That is
+the cleanest possible statement of "this task cannot resolve its own ladder", and it replaces an
+argument that previously rested on a single-seed span being smaller than a cross-hardware floor.
+
+Link prediction, by contrast, is very stable: `none` 0.03 points between seeds, `star` 0.27.
+
+### The collapse and the recovery replicate
+
+| arm | seed 0 | seed 1 | mean |
+|---|---|---|---|
+| `ego` | 72.35 | 75.33 | 73.84 +/- 2.11 |
+| `star` | 88.27 | 88.00 | 88.14 +/- 0.19 |
+| `ego_star` | 90.49 | 90.89 | 90.69 +/- 0.28 |
+| `HopBias` | 89.82 | 89.33 | 89.58 +/- 0.35 |
+| `none` | 89.82 | 89.78 | 89.80 +/- 0.03 |
+
+Collapse 14.30, recovery 16.85. Both at p < 0.0001 at both seeds, discordant 111/29 and 94/24 for
+the recovery. These are the two numbers the argument rests on and they are now replicated.
+
+### The correction we owed ourselves
+
+`tab:mcnemar` now reports every seed as its own replicate rather than quoting the lowest, which
+took it to **32 tests**. At 32 tests an uncontrolled 0.05 threshold is met by chance somewhere in
+the table essentially by construction, and we were quoting p = 0.045 as though it settled
+something. Holding the familywise rate at 0.05 requires p < 0.0016, and exactly four rows clear
+it: the collapse and the recovery, at both seeds.
+
+So the density control was downgraded. `ego_star` over `random_rewire` at 2.86 points and
+p = 0.045, one seed, 30 discordant examples, is now written as the direction the control points
+rather than as the paper's one established topology result. Its mirror is unchanged and still
+does the real work: adding the same random edges to `star` moves nothing at all (p = 0.789, 96.9%
+decision agreement, the highest in the table), so context volume is not what buys the recovery.
+
+`ego_star` over `star` went the other way and we still declined it. It points the same direction
+at both seeds, p = 0.055 and p = 0.026, which under an uncorrected threshold would have been
+tempting. Against 0.0016 it is not close. The paper says both things: consistent direction,
+declined as a claim.
+
+One NC row does reach p = 0.026 (`ego_star` over `none`, seed 1). With 32 tests and an 8-point NC
+seed spread, that is exactly what the table should produce by chance, and the appendix says so
+rather than quietly omitting the row.
+
+**The lesson.** We added the paired tests to stop ourselves overreading accuracy gaps, then read
+the paired tests the same way we had been reading accuracies. Reporting every seed separately is
+what exposed it: the test count doubled and the threshold moved by more than an order of
+magnitude. A test you run many times is a weaker test, and the count belongs in the caption.
+
+### Infrastructure
+
+`/tmp/adelechinda` was cleared at some point overnight, taking the dataset cache and the 16GB
+LLaDA HF cache with it. Running jobs were unaffected (weights already resident) but the next job
+the queue launched would have re-downloaded the backbone, and the test suite silently skipped 14
+tests that gate on the cache existing. Both paths were symlinked to their persistent copies
+(`~/.cache/huggingface` and `plexus/data`) without touching the running queue script. Anything
+that must survive a reboot does not belong under `/tmp`, and a test that skips when its fixture is
+missing reports a green suite while checking nothing.
+
+`experiments/titan3/ZD_cora_none_s0` had also gone missing from disk while remaining tracked in
+git; restored from `2b5e0d1` and confirmed to change no reported number, only the run count.
+
+### Submission state
+
+Body 8 pages, references p9, appendix 18 pages, 27 total. No `\pending` marker anywhere, no
+unresolved references, no overfull boxes above 5pt, zero em-dashes across all four submission
+files, ruff clean. 68 tests pass and 14 skip on the LLaDA cache with all 8 GPUs saturated.
+
+**Timing.** The DiffuLM deadline (Sep 5 AoE) passed at 08:00 EDT on Sep 6, about two hours before
+this work was folded in. This build is the corrected version for camera-ready, arXiv or a
+subsequent venue, not the one that met the deadline.

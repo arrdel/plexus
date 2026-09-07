@@ -1,0 +1,41 @@
+{
+  "task": "lp",
+  "mask_family": "ego_star",
+  "dataset": "cora",
+  "seed": 2,
+  "seq_len": 2048,
+  "epochs": 6,
+  "lr": 5e-05,
+  "weight_decay": 0.0,
+  "effective_batch": 128,
+  "micro_batch": 1,
+  "warmup_frac": 0.03,
+  "grad_clip": 1.0,
+  "k_hops": 2,
+  "max_neighbours_per_hop": 10,
+  "hop_bias_buckets": null,
+  "hop_bias_init": 0.0,
+  "hop_bias_answer_as_target": false,
+  "device": "cuda:0",
+  "bias_dtype": "bfloat16",
+  "eval_every_epochs": 2,
+  "max_eval_examples": null,
+  "log_every_steps": 20,
+  "notes": "",
+  "provenance": {
+    "split": "TAPE/McCallum Cora (title+abstract), random 60/20/20 split by seed. ASSUMED to match TAG-DLM, which cites LLaGA's preprocessing but publishes no code and no split file. Not verified against the paper.",
+    "random_node_control": false,
+    "no_lora": false,
+    "text_coverage": {
+      "file_found": 1.0,
+      "title": 0.9844903988183161,
+      "abstract": 0.8829394387001477,
+      "both": 0.8674298375184638,
+      "empty": 0.0
+    },
+    "n_trainable": 167772160,
+    "host": "titan3",
+    "gpu": "NVIDIA RTX A6000",
+    "torch": "2.5.1+cu121"
+  }
+}
