@@ -21,6 +21,15 @@ wandb/
 outputs/
 logs/
 
+# The manuscripts (paper, reports, proposal, survey) and the talk are built from this repository's
+# run artefacts but are kept out of it: they are course and venue deliverables, not code.
+submission/
+presentation/
+
+# Smoke runs check the plumbing and carry no result; internal drafts are not project output.
+experiments/smoke_*/
+docs/outreach/
+
 __pycache__/
 *.py[cod]
 *.egg-info/
