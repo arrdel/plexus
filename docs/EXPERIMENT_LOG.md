@@ -1250,3 +1250,84 @@ files, ruff clean. 68 tests pass and 14 skip on the LLaDA cache with all 8 GPUs 
 **Timing.** The DiffuLM deadline (Sep 5 AoE) passed at 08:00 EDT on Sep 6, about two hours before
 this work was folded in. This build is the corrected version for camera-ready, arXiv or a
 subsequent venue, not the one that met the deadline.
+---
+
+## E0.0t -- Retargeted from the DiffuLM workshop to ICML 2027
+
+**Date:** 2026-09-07. **Cost:** no GPU time; formatting and float layout only.
+
+**Why.** The DiffuLM deadline passed unmet (E0.0s), so the venue is now the ICML 2027 main
+conference: 8 pages for the body, unlimited references, impact statement and appendix, with the
+CFP not yet released and the deadline projected at late January 2027 from the 2026 cycle.
+
+**What changed.**
+
+- `neurips_2026` with `[dblblindworkshop]` replaced by `icml2027`, and the `\title`/`\author`/
+  `\maketitle` block replaced by ICML's `\twocolumn[\icmltitle ...]` form with an
+  `icmlauthorlist`, `\icmlaffiliation`, `\icmlcorrespondingauthor`, `\icmlkeywords` and
+  `\printAffiliationsAndNotice{}`. Anonymity is automatic while `[accepted]` is absent.
+  `hyperref` and `\theHalgorithm` were already loaded above the style file, as ICML requires.
+- `\bibliographystyle{plainnat}` to `icml2027`.
+- **An impact statement was added**, which ICML requires and which the workshop did not. It sits
+  before the bibliography and does not count against the page limit.
+- **Two columns broke every wide float.** `\textwidth` now spans both columns, so single-column
+  floats using it overflow. The overview figure, the mask ladder and `tab:ladder` became starred
+  floats at `\textwidth`. In the appendix: `graded_bias` and `seq_lengths` became `figure*`;
+  `layer_reach` is now included at `\columnwidth`, which is the 3.25in it was authored at;
+  `tab:noise`, `tab:mcnemar` and `tab:perseed` became `table*`; the previously uncaptioned
+  mask-family, planned-control and hyperparameter tables became captioned `table*` floats,
+  because a float is the only way to span columns and a float needs a caption to stand alone;
+  four narrow tables got `\resizebox{\columnwidth}` or `\small`. Ten overfull boxes, four of them
+  over 130pt, are now zero.
+- `tab:mcnemar` dropped to `\scriptsize`: at `\footnotesize` it was 9.9pt taller than a page.
+
+**Result.** Body 8 pages against a limit of 8, impact statement and references starting on page 8,
+appendix from page 10, 24 pages total. No overfull boxes above 5pt, no unresolved references.
+
+**Two things to note.** The body is *exactly* at the limit with no slack, so any addition now has
+to be paid for by a cut. And the abstract is long enough that it fills the first column and runs
+into the second before the introduction starts; it is legal but it costs half of page 1.
+
+**Also fixed.** `build.sh`'s page-limit check was silently dead: it used `pdfgrep`, which is not
+installed on this host, and its `[[ p -gt 8 ]] && echo` returned non-zero whenever the paper was
+*within* the limit, which under `set -e` aborted the script before the remaining checks ran. It
+now uses `pdftotext`, keys on the impact statement rather than the appendix heading (which wraps
+mid-phrase in a narrow column and so never matched), and reports against 8 rather than 9.
+
+## E0.0u -- The third rewire seed, and the wrap
+
+**Date:** 2026-10-19. **Cost:** no new GPU time; the run below finished on 2026-09-07.
+
+### The last run weakens the density control
+
+`L_rewire_lp_s2`, the third `random_rewire` seed on link prediction, finished two hours after the
+paper's numbers were last generated, so every document had been quoting two seeds.
+
+| | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| `ego_star` vs `random_rewire`, discordant | 21 / 9 | 20 / 8 | 17 / 11 |
+| p | 0.045 | 0.038 | **0.345** |
+
+The gap falls from +2.73 to **+2.27** points. The sign holds at every seed; the strength does
+not, and none of the three is within forty times the corrected threshold (0.0009 at 57 tests).
+The mirror comparison is unchanged in kind: random edges added to the star are worth +0.17, no
+seed below p = 0.689. H2 stays where E0.0s left it, unsettled, and the third seed is now the
+reason given for not claiming it. Every sentence that said "two consistent seeds" was rewritten in
+the paper, appendix, proposal and survey.
+
+Nothing else moved. The collapse (15.77) and the recovery (18.21) hold at p < 0.0001 at all three
+seeds and remain the only comparisons that survive correction.
+
+### Final state
+
+44 training runs and 31 frozen evaluations, about 497 GPU-hours. The paper, the final report (the
+paper's body without its appendix, generated from `main.tex` by `scripts/make_final_report.py`),
+a two-page status report, the proposal, the literature survey and a 26-slide talk all read their
+numbers from the same generated macros.
+
+### Repository
+
+The manuscripts and the talk are now kept out of the repository; it holds the library, tests,
+scripts, run artefacts and these notes. The smoke run and the unsent outreach draft were untracked
+too. Earlier commits still contain `submission/`, so the history would need rewriting to remove
+them from the remote entirely.
