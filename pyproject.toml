@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "plexus"
 version = "0.0.1"
-description = "Structure injection into masked diffusion language models for text-attributed graphs"
+description = "Reachability, not topology: diagnosing graph attention masks in masked diffusion language models"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26,<2.0",
@@ -35,8 +35,6 @@ dev = [
     "ruff>=0.4",
     "ipykernel>=6.29",
 ]
-# torch_geometric and deepspeed are installed separately: PyG needs to match the torch/CUDA build,
-# and DeepSpeed compiles ops against the local toolchain. See scripts/setup_env.sh.
 log = ["wandb>=0.17"]
 
 # torch is installed separately against the CUDA 12.1 wheel index:
