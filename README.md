@@ -101,6 +101,19 @@ seeds. ρ is the share of the attention matrix left readable.
   classification) and 3.31 (link prediction) points below them. TAG-DLM released no code, so every
   claim here is a comparison inside one harness, which is all the ladder needs.
 
+### Frozen (zero-shot) node classification
+
+Without fine-tuning (300 test nodes, 3 seeds per arm), the masks do not separate from the
+unmodified model on either Cora or PubMed:
+
+| mask | ρ (Cora) | Cora | PubMed |
+|---|---:|---:|---:|
+| `none` | 1.000 | 71.33 ± 4.16 | 89.67 ± 1.00 |
+| `star` | 0.487 | 68.56 ± 2.34 | 89.22 ± 1.39 |
+| `ego` | 0.424 | 69.67 ± 4.37 | 87.56 ± 1.50 |
+| `ego_star` | 0.582 | 68.78 ± 3.79 | 89.22 ± 1.64 |
+| `random_rewire` | 0.581 | 68.44 ± 2.69 | 89.56 ± 0.19 |
+
 ## How we decided what counts
 
 Most of this project's effort went into knowing what the instrument can and cannot resolve.
