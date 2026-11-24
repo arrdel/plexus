@@ -1,7 +1,7 @@
 # PLEXUS: Reachability, Not Topology
 
 **Graph attention masks in diffusion language models.**
-Adele Chinda, Haoxin Wang, Esra Akbas · Department of Computer Science, Georgia State University
+Adele Chinda, Esra Akbas · Department of Computer Science, Georgia State University
 
 A published result says that when a diffusion language model is shown a node's *real* citation
 graph instead of a simple star-shaped abstraction, it gets almost **30 points worse** at link
